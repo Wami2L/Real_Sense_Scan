@@ -54,6 +54,12 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
   idéntica en `registration.py`, `test_fotogrametria/calibrador.py` y `live3d/web/js/main.js`.
 - Coordenadas RealSense: x derecha, y abajo, z adelante. Three.js: (x,-y,-z). Blender: (x,z,-y).
 
+## Proyecto Unity asociado
+- `C:\Users\Usuario\Documents\Proyectos Unity\VR ScanWorld` — Unity **6000.3.8f1**, URP 17.3, Input System; casi vacío
+  (solo `SampleScene`), sin git propio. Paquete XR base instalado, sin OpenXR/Meta todavía.
+- Conversión de ejes RealSense → Unity (zurdo, y arriba): `(x, y, z)_unity = (x, -y, z)` en metros; para matrices
+  `T_unity = S · T · S` con `S = diag(1, -1, 1)`.
+
 ## Código legado / no usar como referencia
 - `app_legacy_flask.py`, `camera_manager.py`, `templates/`, `static/` — interfaz Flask antigua.
 - `escanear.py` — script suelto.
