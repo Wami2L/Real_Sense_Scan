@@ -42,7 +42,9 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
   `streaming|degraded|no_device|error|starting` y `simulated: true/false`.
 - Extrínsecas: escribirlas siempre con `src.set_extrinsics(T, **metadatos)` (atómico; la simulación no toca disco).
 - `multiscan.py`: sesión multi-vista (pose graph + Poisson). `generar_malla_offline.py`: Delaunay 2.5D.
-- `RealSense_Importer.py` / `script_blender.py`: lado Blender (usan `bpy`, no importar fuera de Blender).
+- `RealSense_Importer.py`: addon de Blender ≥ 4.0 (probado en 4.5 y 5.2) que importa scan_/dual_scan_/multi_ con ejes,
+  marcos (Cam 2 y vistas con su pose), cámaras y color. `script_blender.py` solo lo envuelve para importar el último escaneo.
+  Usan `bpy`: no importarlos fuera de Blender. Probar con `blender -b --factory-startup --python <script>`.
 - Convención extrínseca: `T_cam2_to_cam1` (4×4, metros), `X_cam1 = T · X_cam2`. Euler: `R = Ry(yaw)·Rx(pitch)·Rz(roll)`,
   idéntica en `registration.py`, `test_fotogrametria/calibrador.py` y `live3d/web/js/main.js`.
 - Coordenadas RealSense: x derecha, y abajo, z adelante. Three.js: (x,-y,-z). Blender: (x,z,-y).
