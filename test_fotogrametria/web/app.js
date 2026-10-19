@@ -72,6 +72,10 @@ const liveStatusText = document.getElementById("live-status-text");
 const systemBanner = document.getElementById("system-banner");
 const btnSavePose = document.getElementById("btn-save-pose");
 
+// Previsualización de la toma
+const pf = Object.fromEntries(["level", "quality", "guides", "headline", "depth", "area", "area-bar", "area-min",
+  "cons", "dist", "noise", "sync", "issues", "pose"].map(k => [k, document.getElementById("pf-" + k)]));
+
 const HTML_ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 function escapeHtml(t) {
   return String(t ?? "").replace(/[&<>"']/g, c => HTML_ESC[c]);
@@ -705,5 +709,68 @@ async function init() {
 
   setInterval(refreshStatus, 2000);
 }
+
+// ==========================================
+// 10. PREVISUALIZACIÓN DE LA TOMA (CALIDAD ESPERADA ANTES DE CAPTURAR)
+// ==========================================
+const PF_LEVEL = {
+  lista: ["pf-ok", "✅ Lista"], mejorable: ["pf-warn", "⚠️ Mejorable"], bloqueada: ["pf-block", "⛔ No capturar"],
+};
+const PF_ICON = { block: "⛔", warn: "⚠️", info: "ℹ️", ok: "✅" };
+
+function renderPreflight(d) {
+  if (!d || d.status !== "ok") return;
+  const [cls, txt] = PF_LEVEL[d.level] || ["pf-pending", "Analizando…"];
+  pf.level.className = `pf-level ${cls}`;
+  pf.level.textContent = txt;
+  pf.quality.textContent = `Calidad esperada: ${d.expected_quality || "--"}`;
+  pf.headline.textContent = d.headline || "";
+  btnTakeCapture.dataset.preflight = d.level || "";
+
+  const cams = d.cams || [];
+  pf.depth.innerHTML = cams.length
+    ? cams.map((c, i) => `<span class="${c.valid_pct < 3 || c.near_pct > 10 ? "pf-bad" : ""}">C${i + 1} ${Math.round(c.valid_pct)}%${c.near_pct > 10 ? " ⚠" : ""}</span>`).join(" · ")
+    : "--";
+  const o = d.overlap;
+  if (o) {
+    pf.area.textContent = `${o.area_m2.toFixed(3)} m² (mín. ${o.min_area_m2})`;
+    const full = o.recommended_area_m2 * 1.5;
+    pf["area-bar"].style.width = `${Math.min(100, (o.area_m2 / full) * 100)}%`;
+    pf["area-bar"].className = `pf-bar-fill ${o.area_m2 >= o.recommended_area_m2 ? "good" : o.area_m2 >= o.min_area_m2 ? "ok" : "bad"}`;
+    pf["area-min"].style.left = `${(o.min_area_m2 / full) * 100}%`;
+    pf.cons.textContent = `${o.consistency_pct}% · exacto ${o.pose_precision_pct}%`;
+    pf.dist.textContent = o.recommended_depth_m != null
+      ? `${o.recommended_depth_m} m (${o.depth_range_m[0]}–${o.depth_range_m[1]})` : "--";
+  } else {
+    pf.area.textContent = "sin pose";
+    pf["area-bar"].style.width = "0%";
+    pf.cons.textContent = "--";
+    pf.dist.textContent = "--";
+  }
+  pf.noise.textContent = d.expected_noise_mm != null ? `~${d.expected_noise_mm} mm` : "--";
+  const moving = Math.max(0, ...cams.map(c => c.moving_pct || 0));
+  pf.sync.textContent = `${d.dt_ms != null ? d.dt_ms + " ms" : "--"} · ${Math.round(moving)}% mov.`;
+  pf.issues.innerHTML = (d.issues || []).map(i =>
+    `<li class="pf-${i.severity}">${PF_ICON[i.severity] || ""} ${escapeHtml(i.text)}</li>`).join("");
+  pf.pose.textContent = `Pose usada: ${d.pose_source || "--"}${d.age_s != null ? ` · hace ${d.age_s.toFixed(1)} s` : ""}`;
+  if (pf.guides.checked !== d.guides) pf.guides.checked = d.guides;
+}
+
+async function refreshPreflight() {
+  if (document.hidden || visorMode !== "live") return;
+  try {
+    const res = await fetch("/api/preflight");
+    renderPreflight(await res.json());
+  } catch (e) {}
+}
+
+pf.guides.addEventListener("change", () => {
+  fetch("/api/guides", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ on: pf.guides.checked }),
+  }).catch(() => {});
+});
+
+setInterval(refreshPreflight, 700);
 
 init();

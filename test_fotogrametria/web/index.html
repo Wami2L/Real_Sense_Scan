@@ -151,6 +151,48 @@
           <span class="cam-lbl">Cam 2 Reproyectada</span>
           <span id="lbl-overlay-alpha" class="alpha-val">50%</span>
         </div>
+
+        <!-- Previsualización de la toma: calidad esperada ANTES de capturar -->
+        <div class="preflight-box" id="preflight-box">
+          <div class="pf-head">
+            <span id="pf-level" class="pf-level pf-pending">Analizando…</span>
+            <span id="pf-quality" class="pf-quality">Calidad esperada: --</span>
+            <label class="pf-toggle" title="Pintar zona común, zona demasiado cerca y cuadrícula sobre la vista en vivo">
+              <input type="checkbox" id="pf-guides" checked> Guías
+            </label>
+          </div>
+          <div id="pf-headline" class="pf-headline">El análisis se actualiza solo mientras miras la vista en vivo.</div>
+          <div class="pf-grid">
+            <div class="pf-cell" title="Píxeles con profundidad entre 0,52 y 3 m (rango útil del D455)">
+              <span class="pf-lbl">Profundidad útil</span><span id="pf-depth" class="pf-val">--</span>
+            </div>
+            <div class="pf-cell" title="Superficie que ven ambas cámaras según la pose usada. El motor necesita al menos el mínimo">
+              <span class="pf-lbl">Zona común</span><span id="pf-area" class="pf-val">--</span>
+              <div class="pf-bar"><div id="pf-area-bar" class="pf-bar-fill"></div><div id="pf-area-min" class="pf-bar-min"></div></div>
+            </div>
+            <div class="pf-cell" title="Zona común que coincide con la pose (± error que el ICP corrige) y la que ya coincide al milímetro">
+              <span class="pf-lbl">Encaje con la pose</span><span id="pf-cons" class="pf-val">--</span>
+            </div>
+            <div class="pf-cell" title="Distancia desde la Cam 1 a la que ambas cámaras ven mejor (centro de la zona compartida)">
+              <span class="pf-lbl">Distancia ideal</span><span id="pf-dist" class="pf-val">--</span>
+            </div>
+            <div class="pf-cell" title="Ruido de profundidad esperado a la distancia actual: crece con la distancia al cuadrado">
+              <span class="pf-lbl">Ruido esperado</span><span id="pf-noise" class="pf-val">--</span>
+            </div>
+            <div class="pf-cell" title="Desfase entre cámaras y parte de la imagen que cambia entre análisis">
+              <span class="pf-lbl">Δt · movimiento</span><span id="pf-sync" class="pf-val">--</span>
+            </div>
+          </div>
+          <ul id="pf-issues" class="pf-issues"></ul>
+          <div class="pf-legend">
+            <span><i class="sw sw-common"></i>vista por ambas</span>
+            <span><i class="sw sw-near"></i>&lt; 0,52 m (no mide)</span>
+            <span><i class="sw sw-conflict"></i>contradice la pose</span>
+            <span><i class="sw sw-dark"></i>sin profundidad</span>
+            <span><i class="sw sw-frustum"></i>zona visible por ambas</span>
+          </div>
+          <div id="pf-pose" class="pf-pose">Pose: --</div>
+        </div>
       </div>
 
       <!-- 3. Tiras / Galería de Tomas Realizadas -->

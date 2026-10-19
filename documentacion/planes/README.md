@@ -17,7 +17,8 @@ En esta carpeta se recopilan las propuestas arquitectónicas, planes técnicos, 
 | **07** | Calibración Interactiva y Fusión Dual sin Duplicados | **Plan de Ejecución Listo** | [MD](file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/07_Plan_Calibracion_Interactiva_y_Fusion_Sin_Duplicados.md) · [PDF](file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/07_Plan_Calibracion_Interactiva_y_Fusion_Sin_Duplicados.pdf) |
 | **08** | Fotogrametría RGB-D y Calibración Automática en Tiempo Real | **Propuesta Técnica Lista** | [MD](file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/08_Fotogrametria_RGBD_y_Calibracion_Automatica_Tiempo_Real.md) · [PDF](file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/08_Fotogrametria_RGBD_y_Calibracion_Automatica_Tiempo_Real.pdf) |
 | **09** | Documentación de Cambios: Alineación Virtual y Estudio de Capturas | **Completado & Validado en HW** | [MD](file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/09_Documentacion_Cambios_Alineacion_Virtual_y_Estudio_Capturas.md) · [PDF](file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/09_Documentacion_Cambios_Alineacion_Virtual_y_Estudio_Capturas.pdf) |
-| **10** | Plan de Optimización y Consolidación para Pre-Producción | **Propuesta** | [MD](10_Plan_Optimizacion_Pre_Produccion.md) |
+| **10** | Plan de Optimización y Consolidación para Pre-Producción | **En curso** | [MD](10_Plan_Optimizacion_Pre_Produccion.md) |
+| **11** | Ecosistema Unificado: Estudio y Live 3D en un Solo Servidor | **Propuesta** | [MD](11_Plan_Ecosistema_Unificado_Estudio_Live3D.md) |
 
 ---
 
@@ -77,4 +78,11 @@ En esta carpeta se recopilan las propuestas arquitectónicas, planes técnicos, 
 * **Reflejo del Alineado en el Entorno de Cámaras:** Fusión 2D en perspectiva (reproyección 3D de Cam 2 sobre Cam 1 con control de opacidad 0–100%), Anaglifo 3D Estéreo (Rojo/Cian) y Nivel Epipolar Horizontal (líneas láser guía de altura).
 * **Control en Caliente del Visor 3D:** Solución de endpoints estáticos `/assets/` y proxy `/viewer3d` para manipular Three.js en vivo a 60 FPS sin bloqueos de origen cruzado.
 
+### 10. [10_Plan_Optimizacion_Pre_Produccion.md](10_Plan_Optimizacion_Pre_Produccion.md)
+* Diagnóstico de ineficiencias (captura dual, estudio, servidor, calibración) y fases F0–F6.
+* Iteración 2 (§6): motor único de alineación, estado por cámara, búsqueda de montaje, previsualización de la toma.
 
+### 11. [11_Plan_Ecosistema_Unificado_Estudio_Live3D.md](11_Plan_Ecosistema_Unificado_Estudio_Live3D.md)
+* Un solo proceso y puerto con el estudio como interfaz principal y el visor 3D como panel.
+* Fases U0–U5: núcleo del estudio extraído, backend único con datos nativos, frontend único, calibración persistente y multi-toma, trabajos en cola y Blender en vivo.
+* Prerrequisitos de hardware: montaje fijo, metadatos UVC de la Cam 2, firmware y emisores.

@@ -8,6 +8,8 @@ Estudio de calibración dual (puerto 5005), cliente del servidor Live 3D (puerto
   Solo se aplica y se guarda en 5002 si el resultado es fiable.
 - Vistas de verificación: fusión 2D, anaglifo, nivel epipolar y correspondencias.
 - Sliders: previsualizan en el visor 3D; guardar es una acción explícita.
+- Previsualización de la toma (antes de capturar): calidad esperada, zona común, zona demasiado
+  cerca y guías pintadas sobre la vista en vivo (live3d/alignment.py: preflight).
 
 NOTA: es transitorio. El plan 10 (Fase 3) lo integra en el servidor 5002 como /studio.
 """
@@ -28,7 +30,8 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from live3d import protocol  # noqa: E402
-from live3d.alignment import (RGBDView, align_pair, deproject, draw_matches, public_result,  # noqa: E402
+from live3d.alignment import (PF_COMMON, PF_CONFLICT, PF_FAR, PF_NEAR, PF_NONE, RGBDView,  # noqa: E402
+                              align_pair, deproject, draw_matches, pose_delta, preflight, public_result,
                               transform)
 from live3d.registration import euler_translation_to_matrix, matrix_to_euler_translation  # noqa: E402
 
@@ -114,9 +117,14 @@ class LiveCameraReceiver:
         return {i: round(now - self.latest[i][2], 2) for i in self.latest}
 
     def preview_jpeg(self):
-        """Vista lado a lado bajo demanda (solo cuando alguien la mira) y cacheada por cuadro."""
-        if self._preview_seq == self._seq and self._preview is not None:
+        """Vista lado a lado bajo demanda (solo cuando alguien la mira) y cacheada por cuadro.
+        Con las guías activas pinta encima el último análisis previo de la toma."""
+        PREFLIGHT["demand_until"] = time.time() + 5.0
+        key = (self._seq, PREFLIGHT["version"] if PREFLIGHT["guides"] else -1)
+        if self._preview_seq == key and self._preview is not None:
             return self._preview
+        guides = PREFLIGHT["guides"] and PREFLIGHT["labels"] is not None
+        cams_pf = (PREFLIGHT["result"] or {}).get("cams") or []
         ages = self.cam_ages()
         tiles = []
         for i in (0, 1):
@@ -126,8 +134,12 @@ class LiveCameraReceiver:
                 if img is not None:
                     tile = cv2.resize(img, (565, 320))
             stale = ages.get(i) is None or ages[i] > STALE_S
+            if guides and not stale:
+                tile = draw_guides(tile, PREFLIGHT["labels"][i], PREFLIGHT["frustum"][i])
             label = f"CAM {i + 1} - " + ("SIN SENAL" if i not in ages else
                                           f"CONGELADA ({ages[i]:.0f} s)" if stale else "EN VIVO")
+            if guides and not stale and i < len(cams_pf) and cams_pf[i].get("median_z_m") is not None:
+                label += f" | {cams_pf[i]['valid_pct']:.0f}% util | {cams_pf[i]['median_z_m']:.1f} m"
             cv2.rectangle(tile, (0, 0), (565, 32), (18, 18, 24), -1)
             cv2.circle(tile, (16, 16), 6, (60, 60, 230) if stale else (0, 255, 120), -1)
             cv2.putText(tile, label, (30, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
@@ -135,7 +147,7 @@ class LiveCameraReceiver:
         combined = np.hstack(tiles)
         cv2.line(combined, (565, 0), (565, 320), (0, 200, 255), 2)
         self._preview = cv2.imencode(".jpg", combined, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes()
-        self._preview_seq = self._seq
+        self._preview_seq = key
         return self._preview
 
     def get_instant_pair(self):
@@ -162,6 +174,89 @@ class LiveCameraReceiver:
         if dt > MAX_PAIR_DT_S:
             raise PairUnavailable(f"Cuadros desincronizados: Δt = {dt * 1000:.0f} ms entre cámaras")
         return {"views": views, "dt_ms": round(dt * 1000, 1), "timestamp": time.strftime("%H:%M:%S")}
+
+
+# ==========================================
+# Previsualización de la toma (antes de capturar)
+# ==========================================
+PREFLIGHT = {"result": None, "labels": None, "frustum": None, "version": 0, "prev": None, "t": 0.0,
+             "demand_until": 0.0, "guides": True, "calib": None, "calib_t": 0.0, "pose_source": None}
+PREVIEW_POSE = {"T": None}   # pose de los sliders sin guardar (None: calibración vigente)
+GUIDE_TINTS = {PF_COMMON: (90, 220, 90), PF_NEAR: (50, 50, 235), PF_CONFLICT: (220, 70, 220)}  # BGR
+
+
+def draw_guides(tile, labels, frustum):
+    """Pinta sobre la imagen en vivo: verde = superficie que ven ambas cámaras, rojo = más cerca que
+    el Min-Z del D455, magenta = contradice la pose, oscuro = sin profundidad útil, contorno cian =
+    zona que ambas cámaras ven según la pose, y cuadrícula de tercios con cruz central."""
+    h, w = tile.shape[:2]
+    lab = cv2.resize(labels, (w, h), interpolation=cv2.INTER_NEAREST)
+    out = tile.astype(np.float32)
+    out[(lab == PF_NONE) | (lab == PF_FAR)] *= 0.5
+    for k, col in GUIDE_TINTS.items():
+        m = lab == k
+        out[m] = out[m] * 0.55 + np.array(col, np.float32) * 0.45
+    tile = out.clip(0, 255).astype(np.uint8)
+    grid = tile.copy()
+    for x in (w // 3, 2 * w // 3):
+        cv2.line(grid, (x, 32), (x, h), (230, 230, 230), 1, cv2.LINE_AA)
+    for y in (h // 3, 2 * h // 3):
+        cv2.line(grid, (0, y), (w, y), (230, 230, 230), 1, cv2.LINE_AA)
+    cv2.drawMarker(grid, (w // 2, h // 2), (255, 255, 255), cv2.MARKER_CROSS, 18, 1, cv2.LINE_AA)
+    tile = cv2.addWeighted(grid, 0.45, tile, 0.55, 0)
+    if frustum is not None and frustum.any():
+        f = cv2.resize(frustum.astype(np.uint8) * 255, (w, h), interpolation=cv2.INTER_NEAREST)
+        cnts, _ = cv2.findContours(f, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(tile, cnts, -1, (255, 230, 0), 2, cv2.LINE_AA)
+    return tile
+
+
+def _run_preflight(T, prev):
+    pair = receiver.get_instant_pair()
+    v1, v2 = pair["views"]
+    return preflight(v1, v2, T, prev=prev)
+
+
+async def preflight_loop():
+    """Analiza el par en vivo ~3 veces por segundo mientras alguien mira la vista o el panel."""
+    loop = asyncio.get_running_loop()
+    while True:
+        await asyncio.sleep(0.3)
+        now = time.time()
+        if now > PREFLIGHT["demand_until"]:
+            PREFLIGHT["prev"] = None
+            continue
+        if now - PREFLIGHT["calib_t"] > 2.0:
+            prior, calib = await current_calibration()
+            PREFLIGHT["calib"] = (prior, calib) if prior is not None and (calib or {}).get("is_calibrated") else None
+            PREFLIGHT["calib_t"] = now
+        vigente = PREFLIGHT["calib"]
+        if PREVIEW_POSE["T"] is not None:
+            T = PREVIEW_POSE["T"]
+            same = vigente is not None and all(v < 0.1 for v in pose_delta(T, vigente[0]).values())
+            source = "calibración vigente" if same else "pose de los sliders (sin guardar)"
+        elif vigente is not None:
+            T, source = vigente[0], "calibración vigente"
+        else:
+            T, source = None, "sin calibración"
+        if vigente is not None and source == "calibración vigente":
+            cal = vigente[1]
+            source += f" ({cal.get('quality') or 'guardada'}" + (
+                f", {cal['consistency_pct']} %)" if cal.get("consistency_pct") is not None else ")")
+        try:
+            res = await loop.run_in_executor(None, _run_preflight, T, PREFLIGHT["prev"])
+        except PairUnavailable as e:
+            PREFLIGHT.update(result={"level": "bloqueada", "expected_quality": "insuficiente", "headline": str(e),
+                                     "issues": [{"severity": "block", "text": str(e)}], "cams": [], "overlap": None},
+                             labels=None, frustum=None, prev=None, t=now, pose_source=source)
+            PREFLIGHT["version"] += 1
+            continue
+        except Exception as e:  # noqa: BLE001
+            print(f"[Previsualización] {e}")
+            continue
+        PREFLIGHT.update(result=public_result(res), labels=res["_labels"], frustum=res["_frustum"],
+                         prev=res["_depth"], t=time.time(), pose_source=source)
+        PREFLIGHT["version"] += 1
 
 
 def compute_camera_alignment_views(view1, view2, T_matrix, alpha=0.5, title="POSE"):
@@ -370,6 +465,24 @@ async def api_live_stream(request):
     return response
 
 
+async def api_preflight(request):
+    """Último análisis previo de la toma (calidad esperada, zona común, avisos)."""
+    PREFLIGHT["demand_until"] = time.time() + 5.0
+    res = PREFLIGHT["result"]
+    out = {"status": "ok" if res else "pending", "guides": PREFLIGHT["guides"],
+           "pose_source": PREFLIGHT["pose_source"],
+           "age_s": round(time.time() - PREFLIGHT["t"], 2) if res else None}
+    if res:
+        out.update(res)
+    return web.json_response(out)
+
+
+async def api_guides(request):
+    data = await request.json()
+    PREFLIGHT["guides"] = bool(data.get("on", True))
+    return web.json_response({"status": "success", "guides": PREFLIGHT["guides"]})
+
+
 async def api_live_frame(request):
     return web.Response(body=receiver.preview_jpeg(), content_type="image/jpeg")
 
@@ -500,6 +613,8 @@ async def api_align(request):
                    "overlap_points": metrics.get("overlap_points"), "dt_ms": metrics.get("dt_ms"),
                    "feature_inliers": metrics.get("inliers"), "simulated": rec.get("simulated", False)}
     applied, msg = await live3d_set_extrinsics(res["matrix_4x4"], calibration)
+    if applied:
+        PREVIEW_POSE["T"], PREFLIGHT["calib_t"] = None, 0.0
     rec.update(aligned=True, fitness_pct=out["fitness_pct"], rmse_mm=out["rmse_mm"],
                matrix_4x4=res["matrix_4x4"], components=res["components"])
     out["status"] = "success"
@@ -564,6 +679,7 @@ async def api_set_manual(request):
         T = _pose_from_body(await request.json())
     except (ValueError, TypeError) as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)
+    PREVIEW_POSE["T"] = T  # la previsualización de la toma juzga la zona común con esta pose
     rec = _find_capture(active_capture_id)
     if rec is not None:
         rec["view_T"] = T.tolist()  # la fusión 2D de la toma activa refleja el ajuste
@@ -580,6 +696,7 @@ async def api_save_pose(request):
     ok, msg = await live3d_set_extrinsics(T.tolist(), {"method": "ajuste manual (estudio)", "source": "estudio"})
     if not ok:
         return web.json_response({"status": "error", "message": f"No se pudo guardar en 5002: {msg}"}, status=502)
+    PREVIEW_POSE["T"], PREFLIGHT["calib_t"] = None, 0.0
     return web.json_response({"status": "success", "message": "Pose manual guardada como calibración vigente."})
 
 
@@ -591,6 +708,7 @@ async def api_apply(request):
                                           {"method": "re-aplicada desde el estudio", "source": "estudio",
                                            "quality": latest_alignment_result.get("quality")})
     if ok:
+        PREVIEW_POSE["T"], PREFLIGHT["calib_t"] = None, 0.0
         return web.json_response({"status": "success", "message": "Alineación aplicada en el visor 3D."})
     return web.json_response({"status": "error", "message": f"No se pudo comunicar con 5002: {msg}"}, status=502)
 
@@ -601,10 +719,12 @@ async def handle_index(request):
 
 async def on_startup(app):
     app["receiver_task"] = asyncio.create_task(receiver.run())
+    app["preflight_task"] = asyncio.create_task(preflight_loop())
 
 
 async def on_cleanup(app):
     receiver.running = False
+    app["preflight_task"].cancel()
     app["receiver_task"].cancel()
     try:
         await app["receiver_task"]
@@ -630,6 +750,8 @@ def create_app():
     app.router.add_get("/api/status", api_status)
     app.router.add_get("/api/live_stream", api_live_stream)
     app.router.add_get("/api/live_frame", api_live_frame)
+    app.router.add_get("/api/preflight", api_preflight)
+    app.router.add_post("/api/guides", api_guides)
     app.router.add_post("/api/capture", api_capture)
     app.router.add_post("/api/align", api_align)
     app.router.add_post("/api/calibrate", api_align)

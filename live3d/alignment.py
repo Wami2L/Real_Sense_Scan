@@ -710,6 +710,248 @@ def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed
     return result
 
 
+
+# --------------------------------------------------------------------------- #
+# Previsualización de la toma: qué calidad cabe esperar ANTES de capturar
+# --------------------------------------------------------------------------- #
+# Etiquetas por píxel (rejilla de profundidad diezmada) para pintar guías sobre la vista en vivo
+PF_NONE, PF_VALID, PF_COMMON, PF_NEAR, PF_CONFLICT, PF_FAR = 0, 1, 2, 3, 4, 5
+
+
+def _decimate(view, target_width=212):
+    """Profundidad (m) diezmada y sus intrínsecas: ~25 k píxeles bastan para una vista previa."""
+    di = view.depth_intr
+    step = max(1, int(round(float(di["width"]) / target_width)))
+    dm = view.depth_m()[::step, ::step]
+    intr = {"width": dm.shape[1], "height": dm.shape[0], "fx": di["fx"] / step, "fy": di["fy"] / step,
+            "ppx": (di["ppx"] + 0.5) / step - 0.5, "ppy": (di["ppy"] + 0.5) / step - 0.5}
+    return dm, intr
+
+
+def _pixel_rays(intr):
+    vv, uu = np.mgrid[0:intr["height"], 0:intr["width"]]
+    return np.stack([(uu - intr["ppx"]) / intr["fx"], (vv - intr["ppy"]) / intr["fy"], np.ones(uu.shape)], -1)
+
+
+def _zbuffer(P, intr):
+    """Profundidad más cercana de unos puntos (marco de la cámara destino) en su rejilla; 0 = nada."""
+    h, w = intr["height"], intr["width"]
+    out = np.full((h, w), np.inf, np.float32)
+    z = P[:, 2]
+    ok = z > 1e-3
+    P, z = P[ok], z[ok]
+    u = np.round(P[:, 0] / z * intr["fx"] + intr["ppx"]).astype(np.int64)
+    v = np.round(P[:, 1] / z * intr["fy"] + intr["ppy"]).astype(np.int64)
+    inside = (u >= 0) & (u < w) & (v >= 0) & (v < h)
+    u, v, z = u[inside], v[inside], z[inside]
+    order = np.argsort(-z)
+    out[v[order], u[order]] = z[order]
+    holes = ~np.isfinite(out)  # cerrar solo los huecos del muestreo: rellenar también donde hay dato
+    out[holes] = cv2.erode(out, np.ones((3, 3), np.uint8))[holes]  # desbordaría el primer plano en los bordes
+    out[~np.isfinite(out)] = 0
+    return out
+
+
+def _cross_check(dm_a, intr_a, dm_b, intr_b, T_b_to_a, sensor, min_thr, slack=0.0):
+    """Marca en la rejilla de A qué píxeles confirma B (común) y cuáles contradice (conflicto).
+    slack (m): tolerancia extra, p. ej. el error de calibración que el ICP corrige solo."""
+    valid_b = (dm_b >= sensor.z_min_m) & (dm_b <= sensor.z_max_m)
+    Pb = (_pixel_rays(intr_b) * dm_b[..., None])[valid_b]
+    pred = _zbuffer(transform(T_b_to_a, Pb), intr_a)
+    valid_a = (dm_a >= sensor.z_min_m) & (dm_a <= sensor.z_max_m)
+    seen = valid_a & (pred > 0)
+    za = dm_a.astype(np.float64)
+    thr = np.maximum(min_thr, 3.0 * np.sqrt(2.0) * sensor.sigma_z(za) + za / intr_a["fx"])
+    thr = np.maximum(thr, slack)
+    common = seen & (np.abs(pred - za) <= thr)
+    conflict = seen & (pred < za - thr)   # B ve una superficie delante de lo que A mide: imposible
+    return common, conflict
+
+
+def _shared_frustum(intr_a, T_a_to_b, intr_b_full, sensor, n=10):
+    """Por geometría pura: qué píxeles de A miran a una zona (entre z_min y z_max) que B también ve.
+    Devuelve la máscara y la profundidad mínima y máxima (en A) de esa zona por píxel."""
+    rays = _pixel_rays(intr_a).reshape(-1, 3)
+    depths = np.linspace(sensor.z_min_m, sensor.z_max_m, n)
+    T = np.asarray(T_a_to_b, np.float64)
+    hit = np.zeros((rays.shape[0], n), bool)
+    for k, d in enumerate(depths):
+        Pb = rays * d @ T[:3, :3].T + T[:3, 3]
+        z = Pb[:, 2]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            u = Pb[:, 0] / z * intr_b_full["fx"] + intr_b_full["ppx"]
+            v = Pb[:, 1] / z * intr_b_full["fy"] + intr_b_full["ppy"]
+        hit[:, k] = ((z >= sensor.z_min_m) & (z <= sensor.z_max_m) & (u >= 0) & (u < intr_b_full["width"])
+                     & (v >= 0) & (v < intr_b_full["height"]))
+    shape = (intr_a["height"], intr_a["width"])
+    mask = hit.any(1)
+    dmin = np.where(mask, depths[np.argmax(hit, 1)], 0.0)
+    dmax = np.where(mask, depths[n - 1 - np.argmax(hit[:, ::-1], 1)], 0.0)
+    return mask.reshape(shape), dmin.reshape(shape), dmax.reshape(shape)
+
+
+def preflight(view1, view2, T=None, sensor=D455, opt=AlignOptions(), prev=None, icp_slack_m=0.05):
+    """Análisis rápido de un par en vivo para no capturar a ciegas.
+
+    T: pose T(2->1) con la que juzgar la zona común (calibración vigente o la de los sliders).
+    prev: el campo "_depth" de la llamada anterior, para saber si la escena se mueve.
+    icp_slack_m: error de pose que la alineación corrige sola (ICP grueso); la superficie común se
+    mide con esa tolerancia y la precisión de la pose actual, con la del ruido del sensor.
+    Devuelve métricas, veredicto (level: lista | mejorable | bloqueada), calidad esperada,
+    avisos accionables y, en claves "_", las rejillas de etiquetas PF_* para pintar guías.
+    """
+    t0 = time.time()
+    views = (view1, view2)
+    dec = [_decimate(v) for v in views]
+    issues = []
+
+    def issue(sev, text):
+        issues.append({"severity": sev, "text": text})
+
+    # 1. Sincronía --------------------------------------------------------------
+    dt_ms = None
+    if view1.timestamp is not None and view2.timestamp is not None:
+        dt_ms = round(abs(float(view1.timestamp) - float(view2.timestamp)) * 1000, 1)
+        if dt_ms > opt.max_dt_s * 1000:
+            issue("block", f"Cámaras desincronizadas (Δt {dt_ms} ms): una está congelada o perdió señal.")
+        elif dt_ms > opt.warn_dt_s * 1000:
+            issue("warn", f"Δt entre cámaras de {dt_ms} ms: no te muevas durante la toma.")
+
+    # 2. Profundidad útil por cámara ---------------------------------------------
+    cams, labels = [], []
+    for i, (dm, intr) in enumerate(dec):
+        name = f"Cam {i + 1}"
+        valid = (dm >= sensor.z_min_m) & (dm <= sensor.z_max_m)
+        near = (dm > 0) & (dm < sensor.z_min_m)
+        far = dm > sensor.z_max_m
+        lab = np.full(dm.shape, PF_NONE, np.uint8)
+        lab[valid], lab[near], lab[far] = PF_VALID, PF_NEAR, PF_FAR
+        labels.append(lab)
+        mz = float(np.median(dm[valid])) if valid.any() else None
+        cam = {"valid_pct": round(float(valid.mean()) * 100, 1), "near_pct": round(float(near.mean()) * 100, 1),
+               "far_pct": round(float(far.mean()) * 100, 1), "nodepth_pct": round(float((dm == 0).mean()) * 100, 1),
+               "median_z_m": None if mz is None else round(mz, 2),
+               "sigma_mm": None if mz is None else round(float(sensor.sigma_z(mz)) * 1000, 1), "moving_pct": None}
+        if prev is not None and i < len(prev) and prev[i] is not None and prev[i].shape == dm.shape:
+            both = valid & (prev[i] >= sensor.z_min_m) & (prev[i] <= sensor.z_max_m)
+            if both.any():
+                thr = np.maximum(0.01, 3.0 * np.sqrt(2.0) * sensor.sigma_z(dm[both]))
+                cam["moving_pct"] = round(float((np.abs(dm[both] - prev[i][both]) > thr).mean()) * 100, 1)
+        cams.append(cam)
+        if valid.mean() < opt.min_valid_depth_frac:
+            issue("block", f"{name}: casi sin profundidad útil ({cam['valid_pct']} %). Tapada, demasiado cerca "
+                           f"(< {sensor.z_min_m:.2f} m) o mirando al vacío.")
+        if near.mean() > 0.10:
+            issue("warn", f"{name}: algo está a menos de {sensor.z_min_m:.2f} m (zona roja) y ahí no mide. Aléjalo.")
+        if mz is not None and mz > 2.5:
+            issue("warn", f"{name}: escena lejana ({mz:.1f} m); el ruido crece con z² (~{cam['sigma_mm']} mm). "
+                          "Acerca el sujeto a 0,8–2 m.")
+        if cam["moving_pct"] is not None and cam["moving_pct"] > 8:
+            issue("warn", f"{name}: la escena se mueve ({cam['moving_pct']} % de la imagen cambia). "
+                          "Quédate quieto durante la toma.")
+
+    # 3. Zona común con la pose dada ---------------------------------------------
+    overlap, frustum = None, [None, None]
+    texture = None
+    min_area = opt.min_overlap_points_blind * opt.cloud_voxel_m ** 2 / 2.0  # lo que exige el motor (~0,075 m²)
+    rec_area = 2.0 * min_area
+    if T is not None:
+        T = np.asarray(T, np.float64)
+        Ti = np.linalg.inv(T)
+        (dm1, i1), (dm2, i2) = dec
+        s1, _ = _cross_check(dm1, i1, dm2, i2, T, sensor, opt.min_threshold_m)          # precisión de la pose
+        s2, _ = _cross_check(dm2, i2, dm1, i1, Ti, sensor, opt.min_threshold_m)
+        c1, k1 = _cross_check(dm1, i1, dm2, i2, T, sensor, opt.min_threshold_m, icp_slack_m)  # superficie común
+        c2, k2 = _cross_check(dm2, i2, dm1, i1, Ti, sensor, opt.min_threshold_m, icp_slack_m)
+        labels[0][k1], labels[1][k2] = PF_CONFLICT, PF_CONFLICT
+        labels[0][c1], labels[1][c2] = PF_COMMON, PF_COMMON
+        f1, a1, b1 = _shared_frustum(i1, Ti, view2.depth_intr, sensor)
+        f2, _, _ = _shared_frustum(i2, T, view1.depth_intr, sensor)
+        frustum = [f1, f2]
+        area = [float(np.sum((dm[c] / it["fx"]) * (dm[c] / it["fy"]))) for dm, it, c in ((dm1, i1, c1), (dm2, i2, c2))]
+        n_c, n_k = int(c1.sum() + c2.sum()), int(k1.sum() + k2.sum())
+        cons = n_c / max(1, n_c + n_k)                                  # ¿la pose está en la cuenca del ICP?
+        precise = int(s1.sum() + s2.sum()) / max(1, n_c)                # ¿y además ya es precisa?
+        overlap = {"area_m2": round(sum(area) / 2.0, 3), "min_area_m2": round(min_area, 3),
+                   "recommended_area_m2": round(rec_area, 3), "consistency_pct": round(cons * 100, 1),
+                   "pose_precision_pct": round(precise * 100, 1),
+                   "common_pct": [round(float(c1.mean()) * 100, 1), round(float(c2.mean()) * 100, 1)],
+                   "conflict_pct": [round(float(k1.mean()) * 100, 1), round(float(k2.mean()) * 100, 1)],
+                   "frustum_pct": [round(float(f1.mean()) * 100, 1), round(float(f2.mean()) * 100, 1)],
+                   "depth_range_m": None, "recommended_depth_m": None}
+        if f1.any():
+            mid = (a1[f1] + b1[f1]) / 2.0   # centro de la zona compartida a lo largo de cada rayo de Cam 1
+            overlap["depth_range_m"] = [round(float(np.percentile(mid, 10)), 2), round(float(np.percentile(mid, 90)), 2)]
+            overlap["recommended_depth_m"] = round(float(np.median(mid)), 2)
+        # textura en la zona común (puntos de interés en Cam 1): lo que tendrá la fotogrametría
+        zone = c1 if c1.sum() >= 50 else f1
+        if zone.any():
+            g = _gray_clahe(view1.color)
+            mask = cv2.resize(zone.astype(np.uint8) * 255, (g.shape[1], g.shape[0]), interpolation=cv2.INTER_NEAREST)
+            pts = cv2.goodFeaturesToTrack(g, maxCorners=800, qualityLevel=0.02, minDistance=6, mask=mask)
+            texture = 0 if pts is None else int(len(pts))
+
+        if not f1.any():
+            issue("block", "Con esta pose las cámaras no comparten campo de visión entre "
+                           f"{sensor.z_min_m:.2f} y {sensor.z_max_m:.1f} m.")
+        elif overlap["area_m2"] < min_area:
+            if n_k > n_c and (n_c + n_k) > 0:
+                issue("warn", f"La pose usada no encaja con lo que ven las cámaras (consistencia "
+                              f"{overlap['consistency_pct']} %). Si moviste las cámaras, captura igualmente y alinea; "
+                              "luego confirma la pose nueva.")
+            else:
+                rng_txt = (f" a {overlap['depth_range_m'][0]}–{overlap['depth_range_m'][1]} m de la Cam 1"
+                           if overlap["depth_range_m"] else "")
+                issue("warn", f"Poca zona común ({overlap['area_m2']} m² de {min_area:.3f} necesarios). Pon objetos "
+                              f"con volumen dentro del contorno cian{rng_txt}, idealmente a "
+                              f"~{overlap['recommended_depth_m']} m.")
+        elif cons < opt.ok_consistency:
+            issue("warn", f"Hay zona común pero la pose usada no encaja (consistencia {overlap['consistency_pct']} %): "
+                          "¿se movió alguna cámara? Captura y alinea para obtener la pose nueva.")
+        elif precise < opt.good_consistency:
+            issue("info", f"La pose usada está algo desviada (solo el {overlap['pose_precision_pct']} % de la zona común "
+                          "coincide al milímetro); la alineación la refinará.")
+        if texture is not None and texture < 40:
+            issue("info", f"Poca textura en la zona común ({texture} puntos de interés): la alineación dependerá "
+                          "solo de la geometría. Ayudan objetos con dibujos o letras.")
+    else:
+        issue("info", "Sin calibración: no se puede estimar la zona común. Asegúrate de que ambas cámaras ven el "
+                      "mismo objeto con volumen a 0,8–2 m; tras la primera alineación aparecerán las guías.")
+
+    # 4. Veredicto ------------------------------------------------------------------
+    blocked = any(i["severity"] == "block" for i in issues)
+    warned = any(i["severity"] == "warn" for i in issues)
+    if blocked:
+        expected = "insuficiente"
+    elif overlap is None:
+        expected = "desconocida"
+    elif overlap["area_m2"] < min_area:
+        expected = "desconocida" if overlap["consistency_pct"] < opt.ok_consistency * 100 else "insuficiente"
+    elif overlap["consistency_pct"] >= opt.good_consistency * 100:
+        expected = "buena"
+    elif overlap["consistency_pct"] >= opt.ok_consistency * 100:
+        expected = "aceptable"
+    else:
+        expected = "desconocida"
+    level = "bloqueada" if blocked else ("lista" if expected == "buena" and not warned else "mejorable")
+    zs = [c["median_z_m"] for c in cams if c["median_z_m"] is not None]
+    noise = round(float(sensor.sigma_z(float(np.mean(zs)))) * 1000, 1) if zs else None
+    if level == "lista":
+        headline = (f"Lista para capturar: calidad esperada buena (consistencia {overlap['consistency_pct']} %, "
+                    f"zona común {overlap['area_m2']} m²).")
+    elif blocked:
+        headline = next(i["text"] for i in issues if i["severity"] == "block")
+    else:
+        first = next((i["text"] for i in issues if i["severity"] == "warn"), None)
+        headline = first or f"Calidad esperada: {expected}."
+    if not issues:
+        issue("ok", "Todo en orden.")
+    return {"level": level, "expected_quality": expected, "headline": headline, "issues": issues,
+            "cams": cams, "dt_ms": dt_ms, "overlap": overlap, "texture_points": texture,
+            "expected_noise_mm": noise, "time_ms": round((time.time() - t0) * 1000, 1),
+            "_labels": labels, "_frustum": frustum, "_depth": [d[0] for d in dec]}
+
+
 def public_result(res):
     """Resultado serializable a JSON (sin objetos de OpenCV)."""
     return {k: v for k, v in res.items() if not k.startswith("_")}

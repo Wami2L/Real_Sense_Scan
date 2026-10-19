@@ -152,3 +152,53 @@ def test_poca_zona_comun_no_da_falso_positivo_en_la_busqueda_a_ciegas(pair):
     res = align_pair(v1, tapada, opt=AlignOptions(min_valid_depth_frac=0.0))
     assert not res["success"] and "matrix_4x4" not in res
     assert not res.get("needs_confirmation")
+
+
+# --------------------------------------------------------------------------- #
+# Previsualización de la toma (preflight)
+# --------------------------------------------------------------------------- #
+def test_preflight_con_la_pose_correcta_esta_lista(pair):
+    from live3d.alignment import PF_COMMON, preflight
+    res = preflight(*pair, GT)
+    assert res["level"] == "lista" and res["expected_quality"] == "buena", public_result(res)
+    o = res["overlap"]
+    assert o["consistency_pct"] > 95 and o["area_m2"] > o["recommended_area_m2"]
+    assert o["depth_range_m"][0] <= o["recommended_depth_m"] <= o["depth_range_m"][1]
+    assert (res["_labels"][0] == PF_COMMON).mean() > 0.5 and res["_frustum"][0].mean() > 0.5
+    assert res["time_ms"] < 2000
+
+
+def test_preflight_avisa_si_la_pose_no_encaja(pair):
+    from live3d.alignment import preflight
+    res = preflight(*pair, euler_translation_to_matrix(-60, 5, 25, 60, 5, -10))
+    assert res["level"] != "lista" and res["expected_quality"] != "buena"
+    assert res["overlap"]["consistency_pct"] < 50
+    assert any("no encaja" in i["text"] for i in res["issues"])
+
+
+def test_preflight_sin_pose_no_inventa_zona_comun(pair):
+    from live3d.alignment import preflight
+    res = preflight(*pair, None)
+    assert res["overlap"] is None and res["expected_quality"] == "desconocida"
+    assert res["_frustum"] == [None, None]
+
+
+def test_preflight_bloquea_camara_tapada_de_cerca(pair):
+    from live3d.alignment import PF_NEAR, preflight
+    v1, v2 = pair
+    cerca = RGBDView(v2.color, np.full_like(v2.depth, 300), v2.depth_intr, 0.001, v2.color_intr,
+                     v2.depth_to_color, v2.timestamp, "Cam 2")   # todo a 0,30 m: por debajo del Min-Z
+    res = preflight(v1, cerca, GT)
+    assert res["level"] == "bloqueada"
+    assert res["cams"][1]["near_pct"] > 90 and (res["_labels"][1] == PF_NEAR).all()
+
+
+def test_preflight_detecta_escena_en_movimiento(pair):
+    from live3d.alignment import preflight
+    v1, v2 = pair
+    antes = preflight(v1, v2, GT)
+    movida = RGBDView(v2.color, (v2.depth.astype(np.float32) * 0.9).astype(np.uint16), v2.depth_intr, 0.001,
+                      v2.color_intr, v2.depth_to_color, v2.timestamp, "Cam 2")
+    res = preflight(v1, movida, GT, prev=antes["_depth"])
+    assert res["cams"][0]["moving_pct"] == 0.0 and res["cams"][1]["moving_pct"] > 50
+    assert any("se mueve" in i["text"] for i in res["issues"])

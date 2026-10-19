@@ -37,6 +37,8 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
 - `live3d/alignment.py`: **motor único** de alineación Cam2→Cam1 (SIFT 3D + RANSAC, FPFH, ICP robusto y
   consistencia proyectiva con el modelo de ruido del D455). Lo usan `/api/dual/auto_align` (5002) y `/api/align` (5005).
   Nunca devuelve matriz si el resultado no es fiable. `test_fotogrametria/calibrador.py` es solo un alias.
+  `preflight()` predice la calidad antes de capturar (zona común, < Min-Z, movimiento, encaje con la pose) y da
+  las máscaras de las guías que el estudio pinta sobre la vista en vivo (`/api/preflight`, `/api/guides`).
 - `live3d/registration.py`: convención de Euler (única), snapshot→nube, TSDF dual y nube de diagnóstico.
 - Estado por cámara: `_DualMixin.cameras_status()` → `status.camera.cams[]`, con agregado
   `streaming|degraded|no_device|error|starting` y `simulated: true/false`.
@@ -76,3 +78,5 @@ python test_fotogrametria/test_cli.py --all-saves # motor de alineación sobre l
 
 ## Plan vigente
 `documentacion/planes/10_Plan_Optimizacion_Pre_Produccion.md` — diagnóstico de ineficiencias y fases de mejora.
+`documentacion/planes/11_Plan_Ecosistema_Unificado_Estudio_Live3D.md` — siguiente paso: estudio y Live 3D en un solo
+servidor con el estudio como interfaz principal (fases U0–U5).
