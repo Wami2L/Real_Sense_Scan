@@ -39,6 +39,9 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
   Nunca devuelve matriz si el resultado no es fiable. `test_fotogrametria/calibrador.py` es solo un alias.
   `preflight()` predice la calidad antes de capturar (zona común, < Min-Z, movimiento, encaje con la pose) y da
   las máscaras de las guías que el estudio pinta sobre la vista en vivo (`/api/preflight`, `/api/guides`).
+  Evidencia inequívoca: marcadores ArUco `DICT_4X4_50` (esquinas 3D por plano del papel; hoja en
+  `tools/generar_marcadores.py`) y puntos a mano (`manual_pairs`, Kabsch robusto). `alignment_error_map` y
+  `combine_poses` (multi-toma). Historial de calibraciones con deshacer: `extrinsics_history` en el JSON.
 - `live3d/registration.py`: convención de Euler (única), snapshot→nube, TSDF dual y nube de diagnóstico.
 - Estado por cámara: `_DualMixin.cameras_status()` → `status.camera.cams[]`, con agregado
   `streaming|degraded|no_device|error|starting` y `simulated: true/false`.
@@ -80,3 +83,4 @@ python test_fotogrametria/test_cli.py --all-saves # motor de alineación sobre l
 `documentacion/planes/10_Plan_Optimizacion_Pre_Produccion.md` — diagnóstico de ineficiencias y fases de mejora.
 `documentacion/planes/11_Plan_Ecosistema_Unificado_Estudio_Live3D.md` — siguiente paso: estudio y Live 3D en un solo
 servidor con el estudio como interfaz principal (fases U0–U5).
+`documentacion/planes/12_Plan_Alineacion_Guiada_Marcadores_y_Puntos.md` — alineación guiada (implementada; §6 = qué refinar).

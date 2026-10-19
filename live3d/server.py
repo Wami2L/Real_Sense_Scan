@@ -699,6 +699,35 @@ async def api_set_extrinsics(request):
         return web.json_response({"status": "error", "message": f"Matriz inválida: {e}"}, status=400)
 
 
+async def api_extrinsics_history(request):
+    """Calibración vigente y anteriores (más reciente primero) con sus componentes legibles."""
+    src = request.app.get("source")
+    if not hasattr(src, "calibration_history"):
+        return web.json_response({"status": "error", "message": "No está en modo dual"}, status=400)
+    from .registration import matrix_to_euler_translation
+    items = []
+    for i, e in enumerate(src.calibration_history()):
+        meta = {k: v for k, v in e.items() if k != "matrix_4x4"}
+        items.append({"index": i, **meta, "components": matrix_to_euler_translation(e["matrix_4x4"])})
+    return web.json_response({"status": "success", "current": src.calibration_info(),
+                              "current_components": matrix_to_euler_translation(src.get_extrinsics()),
+                              "history": items})
+
+
+async def api_extrinsics_restore(request):
+    """Body: {"index": 0} -> vuelve a esa calibración del historial (0 = deshacer el último cambio)."""
+    src = request.app.get("source")
+    if not hasattr(src, "restore_extrinsics"):
+        return web.json_response({"status": "error", "message": "No está en modo dual"}, status=400)
+    try:
+        data = await request.json() if request.can_read_body else {}
+        entry = src.restore_extrinsics(int(data.get("index", 0)))
+    except (IndexError, ValueError, TypeError) as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=400)
+    return web.json_response({"status": "success", "message": "Calibración restaurada",
+                              "matrix_4x4": entry["matrix_4x4"]})
+
+
 STUDIO_ORIGINS = {"http://localhost:5005", "http://127.0.0.1:5005"}
 
 
@@ -774,6 +803,8 @@ def build_app(args):
     app.router.add_post("/api/dual/auto_align", api_dual_auto_align)
     app.router.add_get("/api/dual/extrinsics", api_get_extrinsics)
     app.router.add_post("/api/dual/extrinsics", api_set_extrinsics)
+    app.router.add_get("/api/dual/extrinsics/history", api_extrinsics_history)
+    app.router.add_post("/api/dual/extrinsics/restore", api_extrinsics_restore)
 
     # Rutas Saves
     app.router.add_get("/api/saves", api_list_saves)

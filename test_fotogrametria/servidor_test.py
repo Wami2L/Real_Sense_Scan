@@ -10,6 +10,8 @@ Estudio de calibración dual (puerto 5005), cliente del servidor Live 3D (puerto
 - Sliders: previsualizan en el visor 3D; guardar es una acción explícita.
 - Previsualización de la toma (antes de capturar): calidad esperada, zona común, zona demasiado
   cerca y guías pintadas sobre la vista en vivo (live3d/alignment.py: preflight).
+- Evidencia inequívoca: marcadores ArUco (hoja imprimible en /api/markers.pdf) y puntos fijados a
+  mano; parejas con su residuo, mapa de error, alineación multi-toma e historial con deshacer.
 
 NOTA: es transitorio. El plan 10 (Fase 3) lo integra en el servidor 5002 como /studio.
 """
@@ -31,8 +33,8 @@ if BASE_DIR not in sys.path:
 
 from live3d import protocol  # noqa: E402
 from live3d.alignment import (PF_COMMON, PF_CONFLICT, PF_FAR, PF_NEAR, PF_NONE, RGBDView,  # noqa: E402
-                              align_pair, deproject, draw_matches, pose_delta, preflight, public_result,
-                              transform)
+                              align_pair, alignment_error_map, combine_poses, deproject, draw_matches,
+                              pose_delta, preflight, public_result, transform)
 from live3d.registration import euler_translation_to_matrix, matrix_to_euler_translation  # noqa: E402
 
 PORT = 5005
@@ -135,7 +137,9 @@ class LiveCameraReceiver:
                     tile = cv2.resize(img, (565, 320))
             stale = ages.get(i) is None or ages[i] > STALE_S
             if guides and not stale:
-                tile = draw_guides(tile, PREFLIGHT["labels"][i], PREFLIGHT["frustum"][i])
+                tile = draw_guides(tile, PREFLIGHT["labels"][i], PREFLIGHT["frustum"][i],
+                                   (PREFLIGHT.get("markers") or [None, None])[i],
+                                   (PREFLIGHT.get("color_size") or [None, None])[i])
             label = f"CAM {i + 1} - " + ("SIN SENAL" if i not in ages else
                                           f"CONGELADA ({ages[i]:.0f} s)" if stale else "EN VIVO")
             if guides and not stale and i < len(cams_pf) and cams_pf[i].get("median_z_m") is not None:
@@ -185,7 +189,7 @@ PREVIEW_POSE = {"T": None}   # pose de los sliders sin guardar (None: calibraci�
 GUIDE_TINTS = {PF_COMMON: (90, 220, 90), PF_NEAR: (50, 50, 235), PF_CONFLICT: (220, 70, 220)}  # BGR
 
 
-def draw_guides(tile, labels, frustum):
+def draw_guides(tile, labels, frustum, markers=None, color_size=None):
     """Pinta sobre la imagen en vivo: verde = superficie que ven ambas cámaras, rojo = más cerca que
     el Min-Z del D455, magenta = contradice la pose, oscuro = sin profundidad útil, contorno cian =
     zona que ambas cámaras ven según la pose, y cuadrícula de tercios con cruz central."""
@@ -208,6 +212,13 @@ def draw_guides(tile, labels, frustum):
         f = cv2.resize(frustum.astype(np.uint8) * 255, (w, h), interpolation=cv2.INTER_NEAREST)
         cnts, _ = cv2.findContours(f, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(tile, cnts, -1, (255, 230, 0), 2, cv2.LINE_AA)
+    if markers and color_size:
+        sx, sy = w / float(color_size[0]), h / float(color_size[1])
+        for mid, quad in markers.items():
+            q = np.round(np.asarray(quad) * [sx, sy]).astype(np.int32)
+            cv2.polylines(tile, [q], True, (0, 215, 255), 2, cv2.LINE_AA)
+            cv2.putText(tile, f"ID {mid}", (int(q[:, 0].min()), int(q[:, 1].min()) - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 215, 255), 1, cv2.LINE_AA)
     return tile
 
 
@@ -255,6 +266,7 @@ async def preflight_loop():
             print(f"[Previsualización] {e}")
             continue
         PREFLIGHT.update(result=public_result(res), labels=res["_labels"], frustum=res["_frustum"],
+                         markers=res["_markers"], color_size=res["_color_size"],
                          prev=res["_depth"], t=time.time(), pose_source=source)
         PREFLIGHT["version"] += 1
 
@@ -391,7 +403,8 @@ def system_state(live, dual):
 
 def _capture_summary(c):
     keys = ("id", "title", "timestamp", "preview_url", "matches_url", "overlay_url", "anaglyph_url",
-            "epipolar_url", "aligned", "fitness_pct", "rmse_mm", "quality", "dt_ms", "simulated")
+            "epipolar_url", "error_url", "error_stats", "cam1_url", "cam2_url", "cam_sizes", "aligned",
+            "fitness_pct", "rmse_mm", "quality", "dt_ms", "simulated", "detail")
     return {k: c.get(k) for k in keys}
 
 
@@ -511,11 +524,17 @@ async def api_capture(request):
                 (12, h1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 230, 255), 1, cv2.LINE_AA)
     fn = f"capture_{cid}_preview.jpg"
     cv2.imwrite(os.path.join(CAPTURES_DIR, fn), preview)
+    stamp = int(time.time() * 1000)
+    cam_urls, cam_sizes = {}, {}
+    for k, v in (("cam1", v1), ("cam2", v2)):  # imagen original de cada cámara (para fijar puntos a mano)
+        cv2.imwrite(os.path.join(CAPTURES_DIR, f"capture_{cid}_{k}.jpg"), v.color, [cv2.IMWRITE_JPEG_QUALITY, 93])
+        cam_urls[f"{k}_url"] = f"/captures/capture_{cid}_{k}.jpg?t={stamp}"
+        cam_sizes[k] = [int(v.color.shape[1]), int(v.color.shape[0])]
 
     record = {"id": cid, "title": f"Toma #{cid}", "timestamp": pair["timestamp"],
               "preview_url": f"/captures/{fn}?t={int(time.time() * 1000)}", "aligned": False,
               "fitness_pct": 0, "rmse_mm": 0, "quality": None, "dt_ms": pair["dt_ms"], "simulated": simulated,
-              "pair_data": pair}
+              "pair_data": pair, "cam_sizes": cam_sizes, **cam_urls}
     captures_store.insert(0, record)
     active_capture_id = cid
     while len(captures_store) > MAX_CAPTURES:
@@ -529,7 +548,7 @@ async def api_capture(request):
 
 
 def _remove_capture_files(cid):
-    for suffix in ("preview", "matches", "overlay", "anaglyph", "epipolar"):
+    for suffix in ("preview", "matches", "overlay", "anaglyph", "epipolar", "cam1", "cam2", "error"):
         p = os.path.join(CAPTURES_DIR, f"capture_{cid}_{suffix}.jpg")
         if os.path.exists(p):
             try:
@@ -542,12 +561,40 @@ def _find_capture(cid):
     return next((c for c in captures_store if c["id"] == cid), None)
 
 
+def _write_views(rec, v1, v2, res, view_T, title):
+    """Imágenes de verificación de una toma: parejas, fusión 2D, anaglifo, nivel y mapa de error."""
+    cid, now_ts = rec["id"], int(time.time() * 1000)
+    urls = {}
+    if res is not None:
+        cv2.imwrite(os.path.join(CAPTURES_DIR, f"capture_{cid}_matches.jpg"), draw_matches(v1, v2, res))
+        urls["matches_url"] = f"/captures/capture_{cid}_matches.jpg?t={now_ts}"
+    stats = None
+    if view_T is not None:
+        imgs = compute_camera_alignment_views(v1, v2, view_T, 0.5, title)
+        for name, img in zip(("overlay", "anaglyph", "epipolar"), imgs):
+            cv2.imwrite(os.path.join(CAPTURES_DIR, f"capture_{cid}_{name}.jpg"), img)
+            urls[f"{name}_url"] = f"/captures/capture_{cid}_{name}.jpg?t={now_ts}"
+        err_img, stats = alignment_error_map(v1, v2, np.asarray(view_T, np.float64))
+        cv2.imwrite(os.path.join(CAPTURES_DIR, f"capture_{cid}_error.jpg"), err_img)
+        urls["error_url"] = f"/captures/capture_{cid}_error.jpg?t={now_ts}"
+        stats = dict(stats, pose=title.lower())
+    return urls, stats
+
+
+def _detail(res):
+    """Lo que el panel de detalle necesita para explicar el resultado (sin las imágenes)."""
+    keep = ("quality", "message", "method", "metrics", "candidates", "warnings", "correspondences", "manual_pairs",
+            "needs_confirmation", "quality_if_confirmed", "delta_vs_prior", "total_time_ms", "multi")
+    return {k: res.get(k) for k in keep if k in res}
+
+
 async def api_align(request):
     """Alinea la toma activa con el motor único. Aplica en 5002 solo si el resultado es fiable.
 
     Body opcional: capture_id; seed {tx, ty, tz, yaw, pitch, roll} (pose de los sliders como
     hipótesis adicional); ignore_prior=true cuando el usuario confirma que movió las cámaras
-    (la calibración vigente deja de ser referencia del montaje)."""
+    (la calibración vigente deja de ser referencia del montaje); manual_pairs [{"c1": [u, v],
+    "c2": [u, v]}, ...] puntos fijados a mano en las imágenes originales de cada cámara."""
     global latest_alignment_result, active_capture_id
     data = {}
     if request.can_read_body:
@@ -575,43 +622,58 @@ async def api_align(request):
             extra.append(("pose de los sliders", _pose_from_body(data["seed"])))
         except (ValueError, TypeError):
             pass
+    manual = []
+    for pr in data.get("manual_pairs") or []:
+        try:
+            manual.append(((float(pr["c1"][0]), float(pr["c1"][1])), (float(pr["c2"][0]), float(pr["c2"][1]))))
+        except (KeyError, TypeError, ValueError, IndexError):
+            pass
+    rec["manual_pairs"] = data.get("manual_pairs") or []
     loop = asyncio.get_running_loop()
-    res = await loop.run_in_executor(None, lambda: align_pair(v1, v2, prior, extra_seeds=extra))
+    res = await loop.run_in_executor(None, lambda: align_pair(v1, v2, prior, extra_seeds=extra, manual_pairs=manual))
 
-    cid, now_ts = rec["id"], int(time.time() * 1000)
-    urls = {}
-    matches_fn = f"capture_{cid}_matches.jpg"
-    cv2.imwrite(os.path.join(CAPTURES_DIR, matches_fn), draw_matches(v1, v2, res))
-    urls["matches_url"] = f"/captures/{matches_fn}?t={now_ts}"
-
-    # Vistas de verificación: con la pose nueva si es fiable; si no, con la calibración vigente
-    view_T, view_title = (res["matrix_4x4"], "NUEVA") if res["success"] else (prior, "VIGENTE")
+    # Vistas de verificación: con la pose nueva si es fiable; con la candidata si solo falta que
+    # confirmes que moviste las cámaras (para juzgarla antes); si no, con la calibración vigente
+    if res["success"]:
+        view_T, view_title = res["matrix_4x4"], "NUEVA"
+    elif res.get("needs_confirmation") and res.get("candidate_matrix_4x4"):
+        view_T, view_title = res["candidate_matrix_4x4"], "CANDIDATA"
+    else:
+        view_T, view_title = prior, "VIGENTE"
+    urls, err_stats = await loop.run_in_executor(None, _write_views, rec, v1, v2, res, view_T, view_title)
     if view_T is not None:
-        imgs = await loop.run_in_executor(None, compute_camera_alignment_views, v1, v2, view_T, 0.5, view_title)
-        for name, img in zip(("overlay", "anaglyph", "epipolar"), imgs):
-            fn = f"capture_{cid}_{name}.jpg"
-            cv2.imwrite(os.path.join(CAPTURES_DIR, fn), img)
-            urls[f"{name}_url"] = f"/captures/{fn}?t={now_ts}"
         rec["view_T"] = view_T
 
     metrics = res.get("metrics", {})
     rec.update(urls)
     rec["quality"] = res.get("quality")
+    rec["error_stats"] = err_stats
+    rec["detail"] = _detail(public_result(res))
     out = public_result(res)
     out.update(urls)
+    out["error_stats"] = err_stats
     out["fitness_pct"] = metrics.get("consistency_pct", 0)
     out["rmse_mm"] = metrics.get("rmse_mm")
-    out["capture_id"] = cid
+    out["capture_id"] = rec["id"]
     out["timestamp"] = time.strftime("%H:%M:%S")
     if not res["success"]:
         out["status"] = "warning"
         return web.json_response(out)
+    return web.json_response(await _apply_result(rec, res, out, data.get("ignore_prior")))
 
-    calibration = {"method": res["method"] + (" (montaje confirmado como movido)" if data.get("ignore_prior") else ""),
+
+async def _apply_result(rec, res, out, moved, method_note=""):
+    """Guarda en 5002 una alineación fiable y actualiza la toma y el último resultado."""
+    global latest_alignment_result
+    metrics = res.get("metrics", {})
+    calibration = {"method": res["method"] + method_note + (" (montaje confirmado como movido)" if moved else ""),
                    "quality": res["quality"], "source": "estudio",
                    "consistency_pct": metrics.get("consistency_pct"), "rmse_mm": metrics.get("rmse_mm"),
                    "overlap_points": metrics.get("overlap_points"), "dt_ms": metrics.get("dt_ms"),
-                   "feature_inliers": metrics.get("inliers"), "simulated": rec.get("simulated", False)}
+                   "feature_inliers": metrics.get("inliers"), "evidence": metrics.get("evidence"),
+                   "simulated": rec.get("simulated", False)}
+    if res.get("multi"):
+        calibration["multi"] = {k: res["multi"][k] for k in ("used", "dispersion")}
     applied, msg = await live3d_set_extrinsics(res["matrix_4x4"], calibration)
     if applied:
         PREVIEW_POSE["T"], PREFLIGHT["calib_t"] = None, 0.0
@@ -623,8 +685,142 @@ async def api_align(request):
         out["warnings"] = out.get("warnings", []) + [f"No se pudo guardar en 5002: {msg}"]
     latest_alignment_result = {k: out.get(k) for k in (
         "status", "capture_id", "timestamp", "total_time_ms", "fitness_pct", "rmse_mm", "quality",
-        "components", "matrix_4x4", "matches_url", "overlay_url", "anaglyph_url", "epipolar_url")}
-    return web.json_response(out)
+        "components", "matrix_4x4", "matches_url", "overlay_url", "anaglyph_url", "epipolar_url", "error_url")}
+    return out
+
+
+async def api_align_multi(request):
+    """Alinea varias tomas del mismo montaje y combina sus poses (media robusta ponderada).
+
+    Body: {"capture_ids": [..], "ignore_prior": bool}. Más estable que una sola toma: el ruido y
+    el movimiento de cada toma se promedian y una toma rara se descarta."""
+    global active_capture_id
+    data = await request.json()
+    recs = [r for r in (_find_capture(int(i)) for i in data.get("capture_ids") or []) if r]
+    if len(recs) < 2:
+        return web.json_response({"status": "error", "message": "Selecciona al menos 2 tomas."}, status=400)
+    prior, calib = await current_calibration()
+    if prior is not None and not (calib or {}).get("is_calibrated"):
+        prior = None
+    if data.get("ignore_prior"):
+        prior = None
+    loop = asyncio.get_running_loop()
+    entries, per, needs_conf, last = [], [], False, None
+    for rec in recs:
+        v1, v2 = rec["pair_data"]["views"]
+        res = await loop.run_in_executor(None, lambda a=v1, b=v2: align_pair(a, b, prior))
+        m = res.get("metrics", {})
+        T = res.get("matrix_4x4") or (res.get("candidate_matrix_4x4") if res.get("needs_confirmation") else None)
+        q = res["quality"] if res["success"] else res.get("quality_if_confirmed")
+        per.append({"capture_id": rec["id"], "title": rec["title"], "quality": res["quality"],
+                    "quality_if_confirmed": res.get("quality_if_confirmed"),
+                    "consistency_pct": m.get("consistency_pct"), "message": res["message"]})
+        if T is not None and q in ("buena", "aceptable"):
+            needs_conf |= bool(res.get("needs_confirmation"))
+            entries.append({"T": np.asarray(T, np.float64), "weight": (m.get("overlap_points") or 1) *
+                            (m.get("consistency_pct") or 1) / 100.0, "capture_id": rec["id"], "quality": q,
+                            "rec": rec, "res": res})
+    Tm, used, devs = combine_poses(entries)
+    from live3d.registration import matrix_to_euler_translation
+    used_ids = [e["capture_id"] for e in used]
+    out = {"capture_id": recs[0]["id"], "timestamp": time.strftime("%H:%M:%S"), "warnings": [],
+           "multi": {"per_capture": per, "used": used_ids,
+                     "discarded": [e["capture_id"] for e in entries if e["capture_id"] not in used_ids]}}
+    if Tm is None or len(used) < 2:
+        out.update(status="warning", quality="insuficiente",
+                   message=f"Solo {len(used)} toma(s) dieron una pose fiable: hacen falta al menos 2 que coincidan.")
+        return web.json_response(out)
+    disp = {"max_translation_cm": round(max(d["translation_cm"] for d in devs), 2),
+            "max_rotation_deg": round(max(d["rotation_deg"] for d in devs), 2)}
+    out["multi"]["dispersion"] = disp
+    if all(e["quality"] == "buena" for e in used) and disp["max_translation_cm"] <= 1.0 and disp["max_rotation_deg"] <= 1.0:
+        quality = "buena"
+    elif disp["max_translation_cm"] <= 2.5 and disp["max_rotation_deg"] <= 2.5:
+        quality = "aceptable"
+    else:
+        quality = "insuficiente"
+    best = max(used, key=lambda e: e["weight"])
+    rec, res = best["rec"], dict(best["res"])
+    v1, v2 = rec["pair_data"]["views"]
+    res.update(matrix_4x4=Tm.tolist(), components=matrix_to_euler_translation(Tm), quality=quality,
+               method=f"multi-toma ({len(used)} tomas, base: {res.get('method', '?')})", multi=out["multi"])
+    title = "MULTI"
+    urls, err_stats = await loop.run_in_executor(None, _write_views, rec, v1, v2, res, Tm.tolist(), title)
+    rec.update(urls)
+    rec["view_T"] = Tm.tolist()
+    rec["error_stats"] = err_stats
+    active_capture_id = rec["id"]
+    pub = public_result(res)
+    rec["detail"] = _detail(pub)
+    out.update(pub)
+    out.update(urls)
+    out.update(capture_id=rec["id"], error_stats=err_stats, fitness_pct=res.get("metrics", {}).get("consistency_pct"),
+               rmse_mm=res.get("metrics", {}).get("rmse_mm"))
+    msg = (f"Multi-toma {quality}: {len(used)} tomas coinciden (dispersión máx. {disp['max_translation_cm']} cm / "
+           f"{disp['max_rotation_deg']}°)" + (f"; descartadas {out['multi']['discarded']}" if out["multi"]["discarded"] else "") + ".")
+    out["message"] = msg
+    if quality == "insuficiente":
+        out["status"] = "warning"
+        out["warnings"] = out.get("warnings", []) + ["Las tomas no coinciden entre sí: ¿se movió el montaje entre ellas?"]
+        return web.json_response(out)
+    if needs_conf and not data.get("ignore_prior"):
+        out.update(status="warning", needs_confirmation=True, quality_if_confirmed=quality,
+                   candidate_matrix_4x4=Tm.tolist(), candidate_components=matrix_to_euler_translation(Tm))
+        out.pop("matrix_4x4", None)
+        out["message"] = msg + " Contradice la calibración guardada: confirma si moviste las cámaras."
+        return web.json_response(out)
+    return web.json_response(await _apply_result(rec, res, out, data.get("ignore_prior"),
+                                                 f" · dispersión {disp['max_translation_cm']} cm / {disp['max_rotation_deg']}°"))
+
+
+async def api_error_map(request):
+    """Regenera el mapa de error de una toma con su pose actual (p. ej. tras mover los sliders)."""
+    data = await request.json()
+    rec = _find_capture(int(data.get("capture_id", active_capture_id or 0)))
+    if not rec or rec.get("view_T") is None:
+        return web.json_response({"status": "error", "message": "Toma sin pose que evaluar"}, status=400)
+    v1, v2 = rec["pair_data"]["views"]
+    loop = asyncio.get_running_loop()
+    img, stats = await loop.run_in_executor(None, alignment_error_map, v1, v2, np.asarray(rec["view_T"], np.float64))
+    cv2.imwrite(os.path.join(CAPTURES_DIR, f"capture_{rec['id']}_error.jpg"), img)
+    rec["error_url"] = f"/captures/capture_{rec['id']}_error.jpg?t={int(time.time() * 1000)}"
+    rec["error_stats"] = stats
+    return web.json_response({"status": "success", "error_url": rec["error_url"], "error_stats": stats})
+
+
+async def api_markers_pdf(request):
+    """Hoja imprimible de marcadores ArUco. ?tam=16&ids=0-3"""
+    from tools.generar_marcadores import _parse_ids, marker_sheet_pdf
+    try:
+        size = float(request.query.get("tam", 16))
+        ids = _parse_ids(request.query.get("ids", "0-3"))
+    except Exception as e:  # noqa: BLE001
+        return web.json_response({"status": "error", "message": str(e)}, status=400)
+    pdf = await asyncio.get_running_loop().run_in_executor(None, marker_sheet_pdf, ids, size)
+    return web.Response(body=pdf, content_type="application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="marcadores_aruco_{size:g}cm.pdf"'})
+
+
+async def api_calibration_history(request):
+    data = await live3d_get("/api/dual/extrinsics/history", timeout=2.0)
+    if data is None:
+        return web.json_response({"status": "error", "message": "Sin respuesta de 5002"}, status=502)
+    return web.json_response(data)
+
+
+async def api_calibration_restore(request):
+    data = await request.json()
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(LIVE3D + "/api/dual/extrinsics/restore", json={"index": int(data.get("index", 0))},
+                                 timeout=aiohttp.ClientTimeout(total=3)) as r:
+                body = await r.json()
+                status = r.status
+    except Exception as e:  # noqa: BLE001
+        return web.json_response({"status": "error", "message": str(e)}, status=502)
+    if status == 200:
+        PREVIEW_POSE["T"], PREFLIGHT["calib_t"] = None, 0.0
+    return web.json_response(body, status=status)
 
 
 async def api_reproject(request):
@@ -755,6 +951,11 @@ def create_app():
     app.router.add_post("/api/capture", api_capture)
     app.router.add_post("/api/align", api_align)
     app.router.add_post("/api/calibrate", api_align)
+    app.router.add_post("/api/align_multi", api_align_multi)
+    app.router.add_post("/api/error_map", api_error_map)
+    app.router.add_get("/api/markers.pdf", api_markers_pdf)
+    app.router.add_get("/api/calibration/history", api_calibration_history)
+    app.router.add_post("/api/calibration/restore", api_calibration_restore)
     app.router.add_post("/api/reproject", api_reproject)
     app.router.add_post("/api/captures/select", api_select_capture)
     app.router.add_post("/api/captures/delete", api_delete_capture)

@@ -19,6 +19,7 @@ En esta carpeta se recopilan las propuestas arquitectónicas, planes técnicos, 
 | **09** | Documentación de Cambios: Alineación Virtual y Estudio de Capturas | **Completado & Validado en HW** | [MD](file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/09_Documentacion_Cambios_Alineacion_Virtual_y_Estudio_Capturas.md) · [PDF](file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/09_Documentacion_Cambios_Alineacion_Virtual_y_Estudio_Capturas.pdf) |
 | **10** | Plan de Optimización y Consolidación para Pre-Producción | **En curso** | [MD](10_Plan_Optimizacion_Pre_Produccion.md) |
 | **11** | Ecosistema Unificado: Estudio y Live 3D en un Solo Servidor | **Propuesta** | [MD](11_Plan_Ecosistema_Unificado_Estudio_Live3D.md) |
+| **12** | Alineación Guiada: Marcadores, Puntos a Mano e Interfaz Explicativa | **Implementado · en refinamiento** | [MD](12_Plan_Alineacion_Guiada_Marcadores_y_Puntos.md) |
 
 ---
 
@@ -86,3 +87,8 @@ En esta carpeta se recopilan las propuestas arquitectónicas, planes técnicos, 
 * Un solo proceso y puerto con el estudio como interfaz principal y el visor 3D como panel.
 * Fases U0–U5: núcleo del estudio extraído, backend único con datos nativos, frontend único, calibración persistente y multi-toma, trabajos en cola y Blender en vivo.
 * Prerrequisitos de hardware: montaje fijo, metadatos UVC de la Cam 2, firmware y emisores.
+
+### 12. [12_Plan_Alineacion_Guiada_Marcadores_y_Puntos.md](12_Plan_Alineacion_Guiada_Marcadores_y_Puntos.md)
+* Cómo funciona la alineación (evidencia → hipótesis → ICP → consistencia) y por qué SIFT falla con cámaras a ~65°.
+* Marcadores ArUco con esquinas 3D por plano del papel, puntos fijados a mano con Kabsch robusto, mapa de error, multi-toma e historial con deshacer.
+* Asistente de 6 pasos, detalle explicado, glosario y procedimiento recomendado de calibración.

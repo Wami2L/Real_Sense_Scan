@@ -1113,3 +1113,181 @@ html, body {
 #btn-take-capture[data-preflight="lista"] { box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.7); }
 #btn-take-capture[data-preflight="mejorable"] { box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.7); }
 #btn-take-capture[data-preflight="bloqueada"] { box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.7); }
+
+/* ---------- Asistente de calibración ---------- */
+.wizard {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: rgba(10, 14, 22, 0.75);
+  font-size: 12px;
+}
+
+.wz-steps {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.wz-steps li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid transparent;
+  min-width: 0;
+}
+
+.wz-steps li .wz-n {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(148, 163, 184, 0.25);
+}
+
+.wz-steps li .wz-t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+.wz-steps li.done { color: #6ee7b7; }
+.wz-steps li.done .wz-n { background: var(--accent-green); color: #04140d; }
+.wz-steps li.current { color: var(--text-main); border-color: rgba(59, 130, 246, 0.7); background: rgba(59, 130, 246, 0.15); }
+.wz-steps li.current .wz-n { background: var(--primary); color: #fff; }
+
+.wz-hint { color: var(--text-main); line-height: 1.35; margin-bottom: 6px; }
+
+.wz-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wz-check { display: flex; align-items: center; gap: 4px; color: var(--text-main); cursor: pointer; }
+.wz-lbl { color: var(--text-muted); }
+.wz-sep { width: 1px; height: 16px; background: var(--border-color); }
+.wizard a.btn-tiny { text-decoration: none; }
+
+.seg-btn {
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.seg-btn.active { background: rgba(59, 130, 246, 0.25); border-color: rgba(59, 130, 246, 0.8); color: #fff; }
+.seg-btn.small { padding: 1px 7px; font-size: 10.5px; }
+.btn-tiny.primary { background: rgba(59, 130, 246, 0.3); border-color: rgba(59, 130, 246, 0.8); color: #fff; }
+.btn-tiny:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---------- Selector de puntos a mano ---------- */
+.points-picker {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #000;
+}
+
+.pp-cam { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pp-lbl { font-size: 10.5px; color: #facc15; font-weight: 700; padding-left: 4px; }
+.pp-stage { position: relative; width: 100%; line-height: 0; }
+
+.visor-viewport .points-picker img {
+  width: 100%;
+  height: auto;
+  object-fit: fill;
+  cursor: crosshair;
+  user-select: none;
+}
+
+.pp-stage svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+.pp-loupe {
+  position: absolute;
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  border: 2px solid #facc15;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.points-bar {
+  margin-top: 6px;
+  padding: 7px 9px;
+  border: 1px solid rgba(250, 204, 21, 0.4);
+  border-radius: 8px;
+  background: rgba(250, 204, 21, 0.06);
+  font-size: 12px;
+}
+
+.pp-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pp-status { flex: 1 1 200px; color: #fde68a; font-weight: 600; }
+.pp-tips { color: var(--text-muted); font-size: 11px; margin: 4px 0; line-height: 1.35; }
+.pp-list { margin: 4px 0 0 18px; display: flex; flex-direction: column; gap: 2px; color: var(--text-main); font-size: 11.5px; }
+.pp-list li.ok { color: #6ee7b7; }
+.pp-list li.bad { color: #fca5a5; }
+.pp-del { margin-left: 4px; background: none; border: none; color: var(--text-muted); cursor: pointer; }
+.pp-del:hover { color: #fca5a5; }
+
+/* ---------- Detalle de la alineación y glosario ---------- */
+.align-detail, .glossary, .history-box {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: rgba(10, 14, 22, 0.75);
+  font-size: 12px;
+}
+
+.align-detail summary, .glossary summary { cursor: pointer; font-weight: 700; color: var(--text-main); }
+.ad-summary p, .ad-error p { margin: 6px 0 0; line-height: 1.4; color: var(--text-main); }
+.ad-block { margin-top: 8px; }
+.ad-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--text-muted); margin-bottom: 4px; }
+.ad-filters { margin-left: auto; display: flex; gap: 3px; }
+.ad-scroll { max-height: 190px; overflow: auto; border: 1px solid var(--border-color); border-radius: 6px; }
+.ad-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.ad-table th { position: sticky; top: 0; background: #111827; color: var(--text-muted); font-weight: 600; text-align: left; padding: 3px 6px; }
+.ad-table td { padding: 3px 6px; border-top: 1px solid rgba(255, 255, 255, 0.05); color: var(--text-main); }
+.ad-table tr.chosen td { background: rgba(16, 185, 129, 0.14); color: #a7f3d0; font-weight: 600; }
+.ad-table tr.dim td, .dim { color: var(--text-muted); }
+.ad-table tr.bad td { color: #fca5a5; }
+
+.glossary dl { margin-top: 6px; display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; line-height: 1.35; }
+.glossary dt { color: #93c5fd; font-weight: 600; }
+.glossary dd { color: var(--text-main); }
+
+.confirm-hint { margin-top: 6px; color: #fde68a; font-size: 11.5px; }
+.pf-val .pf-good { color: #6ee7b7; }
+
+/* ---------- Historial de calibraciones ---------- */
+.history-list { list-style: none; margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.history-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text-main); }
+.history-list li.current { color: #a7f3d0; }
+.history-list li .btn-tiny { margin-left: auto; }
+
+/* ---------- Multi-toma en la galería ---------- */
+.card-multi {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #e5e7eb;
+  font-size: 10.5px;
+  cursor: pointer;
+  z-index: 2;
+}

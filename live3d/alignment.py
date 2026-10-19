@@ -95,6 +95,7 @@ class AlignOptions:
     mount_search: bool = True
     mount_search_top: int = 3
     mount_search_budget_s: float = 8.0  # tope de tiempo (escenas sin estructura hacen el ICP lento)
+    min_manual_pairs: int = 3            # parejas fijadas a mano para calcular una pose (mejor 5-6)
 
 
 # --------------------------------------------------------------------------- #
@@ -492,6 +493,182 @@ def mount_search(pyr_src, pyr_tgt, view1, view2, zd1, zd2, sensor, opt):
 
 
 # --------------------------------------------------------------------------- #
+# Correspondencias inequívocas: marcadores ArUco y puntos fijados a mano
+# --------------------------------------------------------------------------- #
+# Diccionario distinto del tablero ChArUco (5X5_100) para no confundirlos. Celdas grandes:
+# se detectan bien a distancia y con mucho ángulo (hasta ~60-70°).
+ARUCO_DICT = cv2.aruco.DICT_4X4_50 if hasattr(cv2, "aruco") else None
+
+
+def detect_markers(bgr):
+    """Marcadores ArUco (DICT_4X4_50) de una imagen BGR: {id: esquinas (4, 2) en píxeles}."""
+    if ARUCO_DICT is None:
+        return {}
+    params = cv2.aruco.DetectorParameters()
+    params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    det = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(ARUCO_DICT), params)
+    corners, ids, _ = det.detectMarkers(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY))
+    if ids is None:
+        return {}
+    return {int(i): c.reshape(4, 2).astype(np.float64) for i, c in zip(ids.ravel(), corners)}
+
+
+def _marker_corners_3d(quad, zmap, intr, sensor):
+    """Esquinas 3D (marco de color) de un marcador impreso.
+
+    La profundidad justo en el borde de un marcador es poco fiable, así que se ajusta un plano a
+    la profundidad de su interior y del margen blanco que lo rodea (el mismo papel) y se cortan
+    los rayos de las 4 esquinas con ese plano.
+    """
+    c2d = quad.mean(0)
+    grown = c2d + (quad - c2d) * 1.3
+    mask = np.zeros(zmap.shape, np.uint8)
+    cv2.fillConvexPoly(mask, np.round(grown).astype(np.int32), 1)
+    vv, uu = np.nonzero((mask > 0) & (zmap > 0))
+    if len(vv) < 25:
+        return None
+    z = zmap[vv, uu].astype(np.float64)
+    X = np.column_stack(((uu - intr["ppx"]) / intr["fx"] * z, (vv - intr["ppy"]) / intr["fy"] * z, z))
+    for _ in range(3):  # plano robusto: fuera lo que no es el papel
+        c = X.mean(0)
+        n = np.linalg.svd(X - c, full_matrices=False)[2][2]
+        r = (X - c) @ n
+        keep = np.abs(r) <= max(3.0 * float(np.std(r)), 0.002)
+        if keep.all() or keep.sum() < 25:
+            break
+        X = X[keep]
+    c = X.mean(0)
+    n = np.linalg.svd(X - c, full_matrices=False)[2][2]
+    rays = np.column_stack(((quad[:, 0] - intr["ppx"]) / intr["fx"], (quad[:, 1] - intr["ppy"]) / intr["fy"],
+                            np.ones(4)))
+    den = rays @ n
+    if np.any(np.abs(den) < 0.05):
+        return None  # marcador visto casi de canto
+    P = rays * ((c @ n) / den)[:, None]
+    if np.any(P[:, 2] < sensor.z_min_m * 0.8) or np.any(P[:, 2] > sensor.z_max_m * 1.2):
+        return None
+    return P
+
+
+def marker_correspondences(view1, view2, sensor=D455, z1=None, z2=None):
+    """Esquinas de los marcadores que ven ambas cámaras, elevadas a 3D (marco de PROFUNDIDAD)."""
+    m1, m2 = detect_markers(view1.color), detect_markers(view2.color)
+    common = sorted(set(m1) & set(m2))
+    info = {"cam1": sorted(m1), "cam2": sorted(m2), "common": common, "used": [], "no_depth": []}
+    P1, P2, px1, px2, labels, owner = [], [], [], [], [], []
+    if common:
+        z1 = depth_in_color_frame(view1, sensor.z_min_m, sensor.z_max_m) if z1 is None else z1
+        z2 = depth_in_color_frame(view2, sensor.z_min_m, sensor.z_max_m) if z2 is None else z2
+    for mid in common:
+        a = _marker_corners_3d(m1[mid], z1, view1.cintr, sensor)
+        b = _marker_corners_3d(m2[mid], z2, view2.cintr, sensor)
+        if a is None or b is None:
+            info["no_depth"].append(mid)
+            continue
+        P1.append(transform(np.linalg.inv(view1.E), a))
+        P2.append(transform(np.linalg.inv(view2.E), b))
+        px1.append(m1[mid])
+        px2.append(m2[mid])
+        labels += [f"M{mid}.{k + 1}" for k in range(4)]
+        owner += [mid] * 4
+        info["used"].append(mid)
+    stack = (lambda L, k: np.vstack(L) if L else np.empty((0, k)))
+    return {"P1": stack(P1, 3), "P2": stack(P2, 3), "px1": stack(px1, 2), "px2": stack(px2, 2),
+            "labels": labels, "owner": np.asarray(owner, np.int64), "info": info, "quads": (m1, m2)}
+
+
+def pose_from_markers(mk, sensor=D455):
+    """T(2->1) desde las esquinas de los marcadores: Kabsch por marcador y consenso entre ellos
+    (un marcador mal medido no arrastra a los demás). Devuelve (T, inliers, umbral) o (None, ...)."""
+    P1, P2, owner = mk["P1"], mk["P2"], mk["owner"]
+    if len(P1) < 4:
+        return None, np.zeros(len(P1), bool), np.empty(0)
+    thr = np.maximum(0.015, 3.0 * np.sqrt(sensor.sigma_z(P1[:, 2]) ** 2 + sensor.sigma_z(P2[:, 2]) ** 2))
+    best_T, best_inl = None, None
+    for mid in np.unique(owner):
+        sel = owner == mid
+        T = kabsch(P2[sel], P1[sel])
+        inl = np.linalg.norm(transform(T, P2) - P1, axis=1) < thr
+        if best_inl is None or inl.sum() > best_inl.sum():
+            best_T, best_inl = T, inl
+    T = kabsch(P2[best_inl], P1[best_inl]) if best_inl.sum() >= 4 else best_T
+    inl = np.linalg.norm(transform(T, P2) - P1, axis=1) < thr
+    return T, inl, thr
+
+
+def _lift_pixel(uv, zmap, intr, radius):
+    """Punto 3D (marco de color) bajo un píxel elegido a mano. Devuelve (xyz | None, en_borde)."""
+    h, w = zmap.shape
+    u, v = int(round(uv[0])), int(round(uv[1]))
+    if not (0 <= u < w and 0 <= v < h):
+        return None, False
+    patch = zmap[max(0, v - radius):min(h, v + radius + 1), max(0, u - radius):min(w, u + radius + 1)]
+    vals = patch[patch > 0]
+    if vals.size < 3:
+        return None, False
+    z = float(np.median(vals))
+    edge = float(vals.max() - vals.min()) > max(0.02, 3.0 * float(D455.sigma_z(z)))
+    if edge:  # entre primer plano y fondo: quedarse con la superficie más cercana (la que se ve)
+        near = vals[vals <= np.percentile(vals, 40)]
+        z = float(np.median(near))
+    return np.array([(uv[0] - intr["ppx"]) / intr["fx"] * z, (uv[1] - intr["ppy"]) / intr["fy"] * z, z]), edge
+
+
+def robust_kabsch(P2, P1, thr, max_trials=400, seed=0):
+    """T(2->1) desde pocas parejas, tolerando alguna errónea (p. ej. un clic en un punto que la
+    otra cámara no ve): prueba tríos, se queda con la pose que más parejas explica y la reajusta.
+    Devuelve (T, inliers)."""
+    import itertools
+    n = len(P1)
+    combos = list(itertools.combinations(range(n), 3))
+    if len(combos) > max_trials:
+        rng = np.random.default_rng(seed)
+        combos = [combos[i] for i in rng.choice(len(combos), max_trials, replace=False)]
+    best, best_key = None, None
+    for c in combos:
+        a = P1[list(c)]
+        if np.linalg.norm(np.cross(a[1] - a[0], a[2] - a[0])) < 1e-4:  # casi alineados
+            continue
+        T = kabsch(P2[list(c)], a)
+        r = np.linalg.norm(transform(T, P2) - P1, axis=1)
+        inl = r < thr
+        key = (int(inl.sum()), -float(r[inl].sum()))
+        if best_key is None or key > best_key:
+            best, best_key = inl, key
+    if best is None or best.sum() < 3:
+        T = kabsch(P2, P1)
+        return T, np.linalg.norm(transform(T, P2) - P1, axis=1) < thr
+    T = kabsch(P2[best], P1[best])
+    return T, np.linalg.norm(transform(T, P2) - P1, axis=1) < thr
+
+
+def lift_manual_pairs(view1, view2, pairs, sensor=D455, z1=None, z2=None):
+    """Parejas elegidas a mano [((u1, v1), (u2, v2)), ...] en píxeles de la imagen de COLOR de cada
+    cámara -> puntos 3D (marco de PROFUNDIDAD). Devuelve P1, P2 (solo las válidas) y el estado de cada una."""
+    z1 = depth_in_color_frame(view1, sensor.z_min_m, sensor.z_max_m) if z1 is None else z1
+    z2 = depth_in_color_frame(view2, sensor.z_min_m, sensor.z_max_m) if z2 is None else z2
+    r1 = max(2, int(math.ceil(view1.cintr["width"] / view1.depth_intr["width"])) + 1)
+    r2 = max(2, int(math.ceil(view2.cintr["width"] / view2.depth_intr["width"])) + 1)
+    P1, P2, px1, px2, status = [], [], [], [], []
+    for i, (a, b) in enumerate(pairs):
+        pa, ea = _lift_pixel(a, z1, view1.cintr, r1)
+        pb, eb = _lift_pixel(b, z2, view2.cintr, r2)
+        st = {"i": i + 1, "ok": pa is not None and pb is not None, "edge": bool(ea or eb), "reason": None}
+        if pa is None or pb is None:
+            st["reason"] = "sin profundidad en " + " y ".join(n for n, p in (("Cam 1", pa), ("Cam 2", pb)) if p is None)
+        else:
+            P1.append(transform(np.linalg.inv(view1.E), pa[None])[0])
+            P2.append(transform(np.linalg.inv(view2.E), pb[None])[0])
+            px1.append(a)
+            px2.append(b)
+            if st["edge"]:
+                st["reason"] = "en un borde de profundidad (menos preciso)"
+        status.append(st)
+    arr = (lambda L, k: np.asarray(L, np.float64).reshape(-1, k))
+    return arr(P1, 3), arr(P2, 3), arr(px1, 2), arr(px2, 2), status
+
+
+# --------------------------------------------------------------------------- #
 # Motor
 # --------------------------------------------------------------------------- #
 def _fail(message, warnings, t0, **extra):
@@ -504,12 +681,17 @@ def _depth_coverage(view, sensor):
     return float(((dm >= sensor.z_min_m) & (dm <= sensor.z_max_m)).mean())
 
 
-def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed=0, extra_seeds=()):
+def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed=0, extra_seeds=(),
+               manual_pairs=()):
     """Calcula T(2->1) en el marco de PROFUNDIDAD de cada cámara.
 
     prior_T: calibración vigente (semilla y referencia de estabilidad del montaje).
     extra_seeds: [(nombre, T)] hipótesis adicionales, p. ej. la pose de los sliders. No cuentan
     como calibración vigente: solo dan un punto de partida al ICP.
+    manual_pairs: [((u1, v1), (u2, v2)), ...] puntos fijados a mano en las imágenes de color.
+
+    Evidencia (de más a menos fiable): puntos a mano, marcadores ArUco (DICT_4X4_50) y SIFT.
+    La geometría (consistencia proyectiva) decide entre hipótesis y la evidencia la desempata.
 
     Devuelve un dict con success, quality ('buena' | 'aceptable' | 'insuficiente'), message,
     matrix_4x4, metrics, candidates, warnings, delta_vs_prior y total_time_ms. Con
@@ -544,7 +726,7 @@ def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed
         if float(cv2.cvtColor(v.color, cv2.COLOR_BGR2GRAY).mean()) < 25:
             warnings.append(f"{name}: imagen muy oscura, habrá pocas texturas para SIFT.")
 
-    # 3. Correspondencias SIFT elevadas a 3D + RANSAC -----------------------
+    # 3. Correspondencias: SIFT, marcadores ArUco y puntos fijados a mano ----------
     rng = np.random.default_rng(seed)
     o3d.utility.random.seed(seed)  # RANSAC de Open3D determinista: mismo par -> mismo resultado
     P1, P2, matches, kp1, kp2, finfo = match_features(view1, view2, sensor, opt)
@@ -556,11 +738,63 @@ def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed
     finfo["inlier_ratio_pct"] = round(inl_ratio * 100, 1)
     feature_strong = (T_feat is not None and n_inl >= opt.min_feature_inliers
                       and inl_ratio >= opt.min_feature_inlier_ratio)
-    if not feature_strong:
+
+    zc1 = depth_in_color_frame(view1, sensor.z_min_m, sensor.z_max_m)
+    zc2 = depth_in_color_frame(view2, sensor.z_min_m, sensor.z_max_m)
+    groups = {}  # evidencia: correspondencias 3D (marco de profundidad) con su umbral
+    if n_inl:
+        groups["sift"] = {"P1": P1[inliers], "P2": P2[inliers], "thr": thr[inliers], "strong": feature_strong}
+
+    mk = marker_correspondences(view1, view2, sensor, zc1, zc2)
+    finfo["markers"] = mk["info"]
+    T_mk, mk_inl, mk_thr = pose_from_markers(mk, sensor)
+    if T_mk is not None:
+        groups["marcadores"] = {"P1": mk["P1"], "P2": mk["P2"], "thr": mk_thr,
+                                "strong": int(mk_inl.sum()) >= 4 and mk_inl.mean() >= 0.75}
+    elif mk["info"]["common"]:
+        warnings.append(f"Marcadores {mk['info']['common']} vistos por ambas cámaras pero sin profundidad útil "
+                        "alrededor: acércalos a 0,6–2 m y que no queden de canto.")
+    for name, ids in (("Cam 1", set(mk["info"]["cam1"]) - set(mk["info"]["cam2"])),
+                      ("Cam 2", set(mk["info"]["cam2"]) - set(mk["info"]["cam1"]))):
+        if ids:
+            warnings.append(f"Marcador(es) {sorted(ids)} solo los ve la {name}: oriéntalos hacia el punto medio entre cámaras.")
+
+    T_man, man = None, None
+    if manual_pairs:
+        M1, M2, mpx1, mpx2, mstatus = lift_manual_pairs(view1, view2, manual_pairs, sensor, zc1, zc2)
+        man = {"P1": M1, "P2": M2, "px1": mpx1, "px2": mpx2, "status": mstatus}
+        finfo["manual_pairs"] = {"given": len(manual_pairs), "valid": len(M1)}
+        if len(M1) >= opt.min_manual_pairs:
+            lat = np.maximum(M1[:, 2] / view1.cintr["fx"], M2[:, 2] / view2.cintr["fx"]) * 4.0  # ~4 px de clic
+            mthr = np.maximum(0.03, 3.0 * np.sqrt(sensor.sigma_z(M1[:, 2]) ** 2 + sensor.sigma_z(M2[:, 2]) ** 2) + lat)
+            T_man, man_inl = robust_kabsch(M2, M1, mthr)
+            res_m = np.linalg.norm(transform(T_man, M2) - M1, axis=1)
+            strong = int(man_inl.sum()) >= 3 and float(man_inl.mean()) >= 0.6
+            groups["manual"] = {"P1": M1, "P2": M2, "thr": mthr, "strong": strong}
+            valid_ids = [st["i"] for st in mstatus if st["ok"]]
+            bad = [valid_ids[k] for k in np.nonzero(~man_inl)[0]]
+            if not strong:
+                worst = int(np.argmax(res_m))
+                warnings.append(f"Los puntos a mano no son coherentes entre sí (la pareja {valid_ids[worst]} se desvía "
+                                f"{res_m[worst] * 100:.1f} cm). Revisa que cada pareja marque el mismo punto físico.")
+            elif bad:
+                warnings.append(f"Pareja(s) a mano {bad} descartada(s): no coinciden con las demás (¿un punto que la "
+                                "otra cámara no ve, o un clic desplazado?).")
+            if len(M1) == 3:
+                warnings.append("Con solo 3 parejas no se puede comprobar si alguna está mal: añade 2–3 más.")
+        else:
+            warnings.append(f"Puntos a mano: {len(M1)} parejas con profundidad de {len(manual_pairs)}; hacen falta "
+                            f"al menos {opt.min_manual_pairs} (mejor 5–6, repartidas y no alineadas).")
+
+    top = next((k for k in ("manual", "marcadores", "sift") if k in groups and groups[k]["strong"]), None)
+    if top != "sift" and not feature_strong:
         why = ("texturas repetitivas o poco distintivas" if len(P1) >= opt.min_feature_inliers
                else "poca textura común con profundidad válida")
-        warnings.append(f"Fotogrametría débil ({n_inl} de {len(P1)} correspondencias 3D coherentes: {why}). "
-                        "La pose depende sobre todo de la geometría; añade objetos con textura única en la zona común.")
+        msg = f"Fotogrametría débil ({n_inl} de {len(P1)} correspondencias 3D coherentes: {why})."
+        if top is None:
+            msg += (" La pose depende sobre todo de la geometría; pon marcadores ArUco en la zona común "
+                    "o marca puntos a mano.")
+        warnings.append(msg)
 
     # 4. Nubes densas (marco de profundidad) y candidatos -------------------
     pcd1 = _cloud(view1, sensor, opt.cloud_voxel_m)
@@ -574,6 +808,10 @@ def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed
         zd[(zd < sensor.z_min_m) | (zd > sensor.z_max_m)] = 0
 
     seeds = []
+    if T_man is not None:
+        seeds.append(("puntos fijados a mano", T_man))
+    if T_mk is not None:
+        seeds.append(("marcadores ArUco", T_mk))
     if T_feat is not None and n_inl >= 3:
         seeds.append(("SIFT 3D + RANSAC", T_feat))
     if prior_T is not None:
@@ -587,23 +825,39 @@ def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed
 
     candidates = []
 
-    def add_candidate(name, T0, blind=False):
-        T = refine_icp(pyr2, pyr1, T0, opt.icp_scales)
+    def agreement(T, kind):
+        g = groups.get(kind)
+        if g is None or not len(g["P1"]):
+            return None
+        return float(np.mean(np.linalg.norm(transform(T, g["P2"]) - g["P1"], axis=1) < g["thr"]))
+
+    def add_candidate(name, T0, blind=False, refine=True):
+        T = refine_icp(pyr2, pyr1, T0, opt.icp_scales) if refine else np.asarray(T0, np.float64)
         if not plausible_pose(T, sensor):
             return
-        ev = evaluate(T, cloud1, cloud2, view1, view2, zd1, zd2, sensor, opt, P1[inliers] if n_inl else None,
-                      P2[inliers] if n_inl else None, thr[inliers] if n_inl else None)
-        candidates.append({"name": name, "T": T, "blind": blind, **ev})
+        ev = evaluate(T, cloud1, cloud2, view1, view2, zd1, zd2, sensor, opt)
+        ag = {k: agreement(T, k) for k in groups}
+        ev["feature_agreement"] = ag.get(top) if top else ag.get("sift")
+        candidates.append({"name": name, "T": T, "blind": blind, "agreements": ag, **ev})
 
-    def is_viable(c):
+    def geo_viable(c):
         min_pts = opt.min_overlap_points_blind if c["blind"] else opt.min_overlap_points
         return c["overlap_points"] >= min_pts and c["overlap_frac"] >= opt.min_overlap_frac
 
+    def is_viable(c):
+        # Con marcadores o puntos a mano coherentes, la pose vale aunque la zona común sea pequeña
+        # (cámaras muy abiertas): la evidencia es inequívoca. Se avisa para revisarla a ojo.
+        return geo_viable(c) or (top in ("manual", "marcadores") and not c["blind"]
+                                 and (c["feature_agreement"] or 0) >= 0.75)
+
     for name, T0 in seeds:
         add_candidate(name, T0)
+        if name in ("puntos fijados a mano", "marcadores ArUco"):
+            add_candidate(name + " (sin ICP)", T0, refine=False)
     for name, T0 in blind_seeds:
         add_candidate(name, T0, blind=True)
-    if opt.mount_search and not any(is_viable(c) and c["consistency"] >= opt.good_consistency for c in candidates):
+    if opt.mount_search and top is None and not any(
+            is_viable(c) and c["consistency"] >= opt.good_consistency for c in candidates):
         t_ms = time.time()
         found, n_done, n_seeds = mount_search(pyr2, pyr1, view1, view2, zd1, zd2, sensor, opt)
         for i, T0 in enumerate(found):
@@ -616,21 +870,29 @@ def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed
     viable = [c for c in candidates if is_viable(c)]
     summary = [{"name": c["name"], "consistency_pct": round(c["consistency"] * 100, 1),
                 "overlap_points": c["overlap_points"], "hidden_points": c["hidden_points"],
-                "overlap_frac_pct": round(c["overlap_frac"] * 100, 1), "rmse_mm": round(c["rmse_mm"], 2) if c["rmse_mm"] == c["rmse_mm"] else None,
-                "feature_agreement_pct": None if c["feature_agreement"] is None else round(c["feature_agreement"] * 100, 1)}
+                "overlap_frac_pct": round(c["overlap_frac"] * 100, 1),
+                "rmse_mm": round(c["rmse_mm"], 2) if c["rmse_mm"] == c["rmse_mm"] else None,
+                "feature_agreement_pct": None if c["feature_agreement"] is None else round(c["feature_agreement"] * 100, 1),
+                "agreements_pct": {k: None if v is None else round(v * 100, 1) for k, v in c["agreements"].items()},
+                "blind": c["blind"], "viable": c in viable}
                for c in candidates]
-    base_metrics = {"dt_ms": dt_ms, "depth_coverage_pct": {k: round(v * 100, 1) for k, v in cov.items()}, **finfo}
+    base_metrics = {"dt_ms": dt_ms, "depth_coverage_pct": {k: round(v * 100, 1) for k, v in cov.items()},
+                    "evidence": top, **finfo}
     if not viable:
-        return _fail("Solape insuficiente entre cámaras: ninguna hipótesis deja zona común suficiente. "
-                     "Coloca el sujeto u objetos donde lo vean AMBAS cámaras, entre "
-                     f"{sensor.z_min_m:.2f} y {sensor.z_max_m:.1f} m, sin taparlas de cerca.",
-                     warnings, t0, candidates=summary, metrics=base_metrics)
+        out = _fail("Solape insuficiente entre cámaras: ninguna hipótesis deja zona común suficiente. "
+                    "Coloca el sujeto u objetos donde lo vean AMBAS cámaras, entre "
+                    f"{sensor.z_min_m:.2f} y {sensor.z_max_m:.1f} m, sin taparlas de cerca, "
+                    "o usa marcadores ArUco / puntos a mano.",
+                    warnings, t0, candidates=summary, metrics=base_metrics)
+        out["correspondences"] = _correspondence_list(None, P1, P2, matches, kp1, kp2, inliers, thr, mk, groups, man)
+        return out
 
-    # 5. Selección: consistencia; con fotogrametría fuerte, que también la respete --
+    # 5. Selección: consistencia geométrica y, si hay evidencia fuerte, que también la respete --
     def score(c):
         s = c["consistency"]
-        if feature_strong and c["feature_agreement"] is not None:
-            s = 0.7 * s + 0.3 * c["feature_agreement"]
+        if top is not None and c["feature_agreement"] is not None:
+            w = 0.3 if top == "sift" else 0.5
+            s = (1 - w) * s + w * c["feature_agreement"]
         return s
 
     best = max(viable, key=score)
@@ -638,15 +900,23 @@ def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed
     prior_c = next((c for c in viable if c["name"] == "calibración vigente"), None)
     if prior_c is not None and prior_c is not best and score(prior_c) >= score(best) - 0.01:
         best = prior_c
+    for s_ in summary:
+        s_["chosen"] = s_["name"] == best["name"]
 
     # 6. Veredicto -----------------------------------------------------------
     median_z = float(np.median(np.concatenate([pts1[:, 2], pts2[:, 2]])))
     expected_sigma_mm = float(sensor.sigma_z(median_z)) * 1000
     cons = best["consistency"]
     quality = "buena" if cons >= opt.good_consistency else ("aceptable" if cons >= opt.ok_consistency else "insuficiente")
-    if feature_strong and best["feature_agreement"] is not None and best["feature_agreement"] < 0.5:
-        warnings.append("La geometría y la fotogrametría no coinciden (posible simetría o superficie plana). "
-                        "Revisa el solape visualmente.")
+    evidence_only = not geo_viable(best)
+    if evidence_only:
+        quality = "aceptable" if (best["feature_agreement"] or 0) >= 0.9 else "insuficiente"
+        warnings.append("Poca superficie común: la pose sale de los marcadores / puntos a mano y la geometría no "
+                        "puede confirmarla. Revísala en la fusión 2D y en el mapa de error.")
+    if top is not None and best["feature_agreement"] is not None and best["feature_agreement"] < 0.5:
+        src = {"sift": "la fotogrametría", "marcadores": "los marcadores", "manual": "los puntos a mano"}[top]
+        warnings.append(f"La geometría y {src} no coinciden (posible simetría, superficie plana o un error en "
+                        "las correspondencias). Revisa el solape visualmente.")
         if quality == "buena":
             quality = "aceptable"
     if best["blind"] and quality != "insuficiente":
@@ -658,26 +928,28 @@ def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed
         if rivals:
             quality = "insuficiente"
             warnings.append(f"Ambigua: {len(rivals)} pose(s) muy distinta(s) explican la escena casi igual de bien. "
-                            "Añade volumen y textura en la zona común (no solo una pared o una persona de cerca).")
+                            "Añade volumen y textura en la zona común, marcadores ArUco o puntos a mano.")
 
     T = best["T"]
     needs_confirmation, quality_if_confirmed = False, None
     delta = pose_delta(prior_T, T) if prior_T is not None else None
     if delta and (delta["translation_cm"] > opt.max_prior_shift_cm or delta["rotation_deg"] > opt.max_prior_shift_deg):
-        strong = quality == "buena" and feature_strong and (best["feature_agreement"] or 0) >= 0.6
+        ag = best["feature_agreement"] or 0
+        strong = ((top == "sift" and quality == "buena" and ag >= 0.6)
+                  or (top in ("marcadores", "manual") and quality != "insuficiente" and ag >= 0.75))
         if not strong and quality != "insuficiente":
             needs_confirmation, quality_if_confirmed = True, quality
             quality = "insuficiente"
             warnings.append(f"La mejor hipótesis se aleja {delta['translation_cm']} cm / {delta['rotation_deg']}° de la "
-                            "calibración vigente sin evidencia fotogramétrica suficiente. Si moviste las cámaras, "
-                            "confírmalo (estudio: «Moví las cámaras») o recalibra con el tablero ChArUco.")
+                            "calibración vigente sin evidencia suficiente (marcadores, puntos a mano o fotogrametría). "
+                            "Si moviste las cámaras, confírmalo (estudio: «Moví las cámaras»).")
     metrics = {
         **base_metrics,
         "consistency_pct": round(cons * 100, 1),
         "overlap_points": best["overlap_points"],
         "overlap_frac_pct": round(best["overlap_frac"] * 100, 1),
         "free_space_violation_pct": round(best["violation_points"] / max(1, best["overlap_points"] + best["violation_points"]) * 100, 1),
-        "rmse_mm": round(best["rmse_mm"], 2),
+        "rmse_mm": round(best["rmse_mm"], 2) if best["rmse_mm"] == best["rmse_mm"] else None,
         "expected_sigma_mm": round(expected_sigma_mm, 2),
         "median_depth_m": round(median_z, 2),
         "feature_agreement_pct": None if best["feature_agreement"] is None else round(best["feature_agreement"] * 100, 1),
@@ -685,21 +957,25 @@ def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed
     result = {
         "success": quality != "insuficiente",
         "quality": quality,
-        "method": best["name"] + " + ICP point-to-plane robusto",
+        "method": best["name"] + ("" if "sin ICP" in best["name"] else " + ICP point-to-plane robusto"),
         "metrics": metrics,
         "candidates": summary,
         "warnings": warnings,
         "delta_vs_prior": delta,
         "needs_confirmation": needs_confirmation,
         "quality_if_confirmed": quality_if_confirmed,  # calidad geométrica si el montaje se movió de verdad
+        "correspondences": _correspondence_list(T, P1, P2, matches, kp1, kp2, inliers, thr, mk, groups, man),
         "total_time_ms": round((time.time() - t0) * 1000, 1),
-        "_debug": {"kp1": kp1, "kp2": kp2, "matches": matches, "inliers": inliers},
+        "_debug": {"kp1": kp1, "kp2": kp2, "matches": matches, "inliers": inliers, "markers": mk["quads"]},
     }
+    if man is not None:
+        result["manual_pairs"] = man["status"]
     if result["success"]:
         result["matrix_4x4"] = np.asarray(T).tolist()
         result["components"] = matrix_to_euler_translation(T)
+        rm = f", RMSE {metrics['rmse_mm']} mm" if metrics["rmse_mm"] is not None else ""
         result["message"] = (f"Alineación {quality}: consistencia {metrics['consistency_pct']} % sobre "
-                             f"{metrics['overlap_points']} puntos comunes, RMSE {metrics['rmse_mm']} mm "
+                             f"{metrics['overlap_points']} puntos comunes{rm} "
                              f"(ruido esperado del sensor ~{metrics['expected_sigma_mm']} mm a {median_z:.1f} m).")
     else:
         result["candidate_matrix_4x4"] = np.asarray(T).tolist()  # solo para inspección visual
@@ -708,6 +984,51 @@ def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed
                   else f"consistencia {metrics['consistency_pct']} %")
         result["message"] = f"Alineación no fiable ({reason}): no se aplica y se conserva la calibración vigente."
     return result
+
+
+def _correspondence_list(T, P1, P2, matches, kp1, kp2, inliers, thr, mk, groups, man, max_sift=120):
+    """Parejas para el explorador del estudio: píxeles en ambas imágenes de color y residuo 3D (mm)
+    con la pose final. kind: manual | marcador | sift."""
+    out = []
+
+    def residual(Q1, Q2, k):
+        if T is None or not len(Q1):
+            return [None] * len(Q1)
+        return list(np.linalg.norm(transform(T, Q2) - Q1, axis=1) * 1000)
+
+    if man is not None:
+        r = residual(man["P1"], man["P2"], "manual")
+        mthr = groups["manual"]["thr"] if "manual" in groups else np.full(len(man["P1"]), 0.03)
+        j = 0
+        for st in man["status"]:
+            item = {"kind": "manual", "label": f"P{st['i']}", "residual_mm": None, "ok": False,
+                    "note": st["reason"], "p1": None, "p2": None}
+            if st["ok"]:
+                item.update(p1=[round(float(x), 1) for x in man["px1"][j]], p2=[round(float(x), 1) for x in man["px2"][j]])
+                if r[j] is not None:
+                    item["residual_mm"] = round(float(r[j]), 1)
+                    item["ok"] = bool(r[j] / 1000 < mthr[j])
+                j += 1
+            out.append(item)
+    if len(mk["P1"]):
+        r = residual(mk["P1"], mk["P2"], "marcadores")
+        mthr = groups["marcadores"]["thr"] if "marcadores" in groups else np.full(len(mk["P1"]), 0.015)
+        for k in range(len(mk["P1"])):
+            out.append({"kind": "marcador", "label": mk["labels"][k],
+                        "p1": [round(float(x), 1) for x in mk["px1"][k]], "p2": [round(float(x), 1) for x in mk["px2"][k]],
+                        "residual_mm": None if r[k] is None else round(float(r[k]), 1),
+                        "ok": r[k] is not None and bool(r[k] / 1000 < mthr[k]), "note": None})
+    if len(P1):
+        r = residual(P1, P2, "sift")
+        order = sorted(range(len(P1)), key=lambda k: (not bool(inliers[k]) if len(inliers) else True, r[k] or 0))
+        for n, k in enumerate(order[:max_sift]):
+            m = matches[k]
+            out.append({"kind": "sift", "label": f"S{n + 1}",
+                        "p1": [round(float(x), 1) for x in kp1[m.queryIdx].pt],
+                        "p2": [round(float(x), 1) for x in kp2[m.trainIdx].pt],
+                        "residual_mm": None if r[k] is None else round(float(r[k]), 1),
+                        "ok": r[k] is not None and bool(r[k] / 1000 < thr[k]), "note": None})
+    return out
 
 
 
@@ -850,6 +1171,16 @@ def preflight(view1, view2, T=None, sensor=D455, opt=AlignOptions(), prev=None, 
             issue("warn", f"{name}: la escena se mueve ({cam['moving_pct']} % de la imagen cambia). "
                           "Quédate quieto durante la toma.")
 
+    # 2b. Marcadores ArUco: si ambas cámaras ven alguno, la alineación será directa -----
+    mq = (detect_markers(view1.color), detect_markers(view2.color))
+    common_mk = sorted(set(mq[0]) & set(mq[1]))
+    markers = {"cam1": sorted(mq[0]), "cam2": sorted(mq[1]), "common": common_mk}
+    if common_mk:
+        issue("ok", f"Marcador(es) {common_mk} visibles por ambas cámaras: la alineación será directa.")
+    for name, ids in (("Cam 1", set(mq[0]) - set(mq[1])), ("Cam 2", set(mq[1]) - set(mq[0]))):
+        if ids:
+            issue("info", f"Marcador(es) {sorted(ids)} solo en la {name}: gíralos hacia el punto medio entre cámaras.")
+
     # 3. Zona común con la pose dada ---------------------------------------------
     overlap, frustum = None, [None, None]
     texture = None
@@ -933,6 +1264,8 @@ def preflight(view1, view2, T=None, sensor=D455, opt=AlignOptions(), prev=None, 
         expected = "aceptable"
     else:
         expected = "desconocida"
+    if not blocked and common_mk and expected in ("desconocida", "insuficiente"):
+        expected = "aceptable"  # los marcadores dan la pose aunque la calibración vieja no encaje
     level = "bloqueada" if blocked else ("lista" if expected == "buena" and not warned else "mejorable")
     zs = [c["median_z_m"] for c in cams if c["median_z_m"] is not None]
     noise = round(float(sensor.sigma_z(float(np.mean(zs)))) * 1000, 1) if zs else None
@@ -946,10 +1279,89 @@ def preflight(view1, view2, T=None, sensor=D455, opt=AlignOptions(), prev=None, 
         headline = first or f"Calidad esperada: {expected}."
     if not issues:
         issue("ok", "Todo en orden.")
+    if level != "lista" and not blocked and common_mk and not warned:
+        headline = f"Marcadores {common_mk} vistos por ambas cámaras: captura y alinea."
     return {"level": level, "expected_quality": expected, "headline": headline, "issues": issues,
-            "cams": cams, "dt_ms": dt_ms, "overlap": overlap, "texture_points": texture,
+            "cams": cams, "dt_ms": dt_ms, "overlap": overlap, "texture_points": texture, "markers": markers,
+            "_markers": [{k: v.tolist() for k, v in m.items()} for m in mq],
+            "_color_size": [list(v.color.shape[1::-1]) for v in views],
             "expected_noise_mm": noise, "time_ms": round((time.time() - t0) * 1000, 1),
             "_labels": labels, "_frustum": frustum, "_depth": [d[0] for d in dec]}
+
+
+
+# --------------------------------------------------------------------------- #
+# Mapa de error de la alineación y combinación de varias tomas
+# --------------------------------------------------------------------------- #
+ERROR_BINS_MM = (5.0, 10.0, 20.0, 50.0)
+ERROR_COLORS = ((80, 200, 80), (60, 220, 230), (40, 150, 250), (60, 60, 235), (60, 20, 150))  # BGR por tramo
+ERROR_LABELS = ("< 5 mm", "5-10", "10-20", "20-50", "> 50 mm")
+
+
+def alignment_error_map(view1, view2, T, sensor=D455, same_surface_m=0.10):
+    """Distancia entre lo que mide la Cam 1 y lo que mide la Cam 2 llevada con T, píxel a píxel.
+
+    Pinta sobre la imagen de la Cam 1: verde < 5 mm ... rojo > 20 mm. Solo cuenta la superficie que
+    ven ambas (diferencias > same_surface_m son oclusiones u otra superficie, no error de pose).
+    Devuelve (imagen BGR, estadísticas).
+    """
+    (dm1, i1), (dm2, i2) = _decimate(view1, 424), _decimate(view2, 424)
+    valid2 = (dm2 >= sensor.z_min_m) & (dm2 <= sensor.z_max_m)
+    pred = _zbuffer(transform(T, (_pixel_rays(i2) * dm2[..., None])[valid2]), i1)
+    valid1 = (dm1 >= sensor.z_min_m) & (dm1 <= sensor.z_max_m)
+    err = np.abs(pred.astype(np.float64) - dm1.astype(np.float64)) * 1000.0
+    same = valid1 & (pred > 0) & (err <= same_surface_m * 1000.0)
+    e = err[same]
+    stats = {"pixels": int(same.sum()), "area_m2": round(float(np.sum((dm1[same] / i1["fx"]) * (dm1[same] / i1["fy"]))), 3)}
+    if e.size:
+        zs = float(np.median(dm1[same]))
+        stats.update(median_mm=round(float(np.median(e)), 1), p90_mm=round(float(np.percentile(e, 90)), 1),
+                     pct_lt_5=round(float(np.mean(e < 5)) * 100, 1), pct_lt_10=round(float(np.mean(e < 10)) * 100, 1),
+                     pct_lt_20=round(float(np.mean(e < 20)) * 100, 1), median_depth_m=round(zs, 2),
+                     expected_sigma_mm=round(float(sensor.sigma_z(zs)) * 1000 * math.sqrt(2.0), 1))
+    # pintar sobre el color de Cam 1 (rejilla de profundidad -> imagen de color)
+    base = view1.color.copy()
+    h, w = base.shape[:2]
+    bins = np.digitize(err, ERROR_BINS_MM)
+    lab = np.where(same, bins + 1, 0).astype(np.uint8)
+    lab = cv2.resize(lab, (w, h), interpolation=cv2.INTER_NEAREST)
+    out = base.astype(np.float32) * 0.45
+    for k, col in enumerate(ERROR_COLORS):
+        m = lab == k + 1
+        out[m] = base[m].astype(np.float32) * 0.35 + np.array(col, np.float32) * 0.65
+    img = out.clip(0, 255).astype(np.uint8)
+    band = np.full((46, w, 3), 24, np.uint8)
+    x = 10
+    for col, txt in zip(ERROR_COLORS, ERROR_LABELS):
+        cv2.rectangle(band, (x, 8), (x + 14, 22), col, -1)
+        cv2.putText(band, txt, (x + 18, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (230, 230, 230), 1, cv2.LINE_AA)
+        x += 22 + 9 * len(txt) + 14
+    line = ("Sin superficie comun" if not e.size else
+            f"Mediana {stats['median_mm']} mm | p90 {stats['p90_mm']} mm | <10 mm: {stats['pct_lt_10']}% | "
+            f"comun {stats['area_m2']} m2 | ruido esperado ~{stats['expected_sigma_mm']} mm")
+    cv2.putText(band, line, (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 230, 180), 1, cv2.LINE_AA)
+    return np.vstack([img, band]), stats
+
+
+def combine_poses(entries, max_dev_cm=3.0, max_dev_deg=3.0):
+    """Media ponderada robusta de varias T(2->1) del mismo montaje (una por toma).
+
+    entries: [{"T": 4x4, "weight": w, ...}]. Descarta las que se alejan de la de más peso más de
+    max_dev_cm / max_dev_deg. Devuelve (T_media, usadas, desviaciones de cada usada a la media).
+    """
+    if not entries:
+        return None, [], []
+    ref = max(entries, key=lambda e: e["weight"])["T"]
+    used = [e for e in entries if pose_delta(e["T"], ref)["translation_cm"] <= max_dev_cm
+            and pose_delta(e["T"], ref)["rotation_deg"] <= max_dev_deg]
+    w = np.array([max(e["weight"], 1e-6) for e in used], np.float64)
+    Rs = np.stack([np.asarray(e["T"], np.float64)[:3, :3] for e in used])
+    ts = np.stack([np.asarray(e["T"], np.float64)[:3, 3] for e in used])
+    U, _, Vt = np.linalg.svd(np.einsum("i,ijk->jk", w, Rs))
+    R = U @ np.diag([1.0, 1.0, np.sign(np.linalg.det(U @ Vt))]) @ Vt
+    Tm = np.eye(4)
+    Tm[:3, :3], Tm[:3, 3] = R, (w[:, None] * ts).sum(0) / w.sum()
+    return Tm, used, [pose_delta(e["T"], Tm) for e in used]
 
 
 def public_result(res):
@@ -957,34 +1369,50 @@ def public_result(res):
     return {k: v for k, v in res.items() if not k.startswith("_")}
 
 
-def draw_matches(view1, view2, res, max_lines=60):
-    """Imagen de diagnóstico: inliers 3D (verde) y descartados (rojo), con métricas."""
+KIND_COLORS = {"sift": ((80, 220, 80), (60, 60, 230)), "marcador": ((0, 215, 255), (0, 120, 255)),
+               "manual": ((255, 220, 0), (220, 60, 220))}  # BGR: (coherente, incoherente)
+
+
+def draw_matches(view1, view2, res, max_lines=80):
+    """Imagen de diagnóstico: parejas numeradas por tipo (SIFT, marcador, a mano), coherentes con la
+    pose final o no, marcadores detectados y las métricas."""
     img1, img2 = view1.color, view2.color
     h = max(img1.shape[0], img2.shape[0])
     w1 = img1.shape[1]
     vis = np.zeros((h + 64, w1 + img2.shape[1], 3), np.uint8)
     vis[:img1.shape[0], :w1] = img1
     vis[:img2.shape[0], w1:] = img2
-    dbg = res.get("_debug") or {}
-    kp1, kp2, matches = dbg.get("kp1") or [], dbg.get("kp2") or [], dbg.get("matches") or []
-    inl = dbg.get("inliers")
-    pairs = list(zip(matches, inl if inl is not None and len(inl) == len(matches) else [False] * len(matches)))
-    pairs.sort(key=lambda p: not p[1])
-    for m, ok in pairs[:max_lines]:
-        p1 = tuple(int(round(c)) for c in kp1[m.queryIdx].pt)
-        p2 = (int(round(kp2[m.trainIdx].pt[0])) + w1, int(round(kp2[m.trainIdx].pt[1])))
-        col = (80, 220, 80) if ok else (60, 60, 230)
-        cv2.line(vis, p1, p2, col, 1, cv2.LINE_AA)
-        cv2.circle(vis, p1, 3, col, -1)
-        cv2.circle(vis, p2, 3, col, -1)
+    quads = ((res.get("_debug") or {}).get("markers")) or ({}, {})
+    for off, q in ((0, quads[0]), (w1, quads[1])):
+        for mid, c in q.items():
+            pts = np.round(c + [off, 0]).astype(np.int32)
+            cv2.polylines(vis, [pts], True, (0, 215, 255), 2, cv2.LINE_AA)
+            cv2.putText(vis, f"ID {mid}", tuple(pts[0] + [0, -6]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 215, 255), 1,
+                        cv2.LINE_AA)
+    corr = [c for c in res.get("correspondences") or [] if c.get("p1") is not None]
+    corr = [c for c in corr if c["kind"] != "sift"] + [c for c in corr if c["kind"] == "sift"][:max_lines]
+    for c in corr:
+        good, bad = KIND_COLORS[c["kind"]]
+        col = good if c["ok"] else bad
+        p1 = tuple(int(round(v)) for v in c["p1"])
+        p2 = (int(round(c["p2"][0])) + w1, int(round(c["p2"][1])))
+        cv2.line(vis, p1, p2, col, 1 if c["kind"] == "sift" else 2, cv2.LINE_AA)
+        for p in (p1, p2):
+            cv2.circle(vis, p, 3 if c["kind"] == "sift" else 5, col, -1)
+        if c["kind"] != "sift":
+            for p in (p1, p2):
+                cv2.putText(vis, c["label"], (p[0] + 6, p[1] - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1, cv2.LINE_AA)
     met = res.get("metrics") or {}
     cv2.rectangle(vis, (0, h), (vis.shape[1], h + 64), (24, 20, 18), -1)
     line1 = (f"{res.get('quality', '?').upper()} | consistencia {met.get('consistency_pct', '-')}% | "
-             f"RMSE {met.get('rmse_mm', '-')} mm (ruido esperado {met.get('expected_sigma_mm', '-')} mm)")
+             f"RMSE {met.get('rmse_mm', '-')} mm (ruido esperado {met.get('expected_sigma_mm', '-')} mm) | "
+             f"evidencia: {met.get('evidence') or 'solo geometria'}")
+    mk = met.get("markers") or {}
     line2 = (f"SIFT: {met.get('matches', 0)} pares, {met.get('lifted', 0)} con profundidad, "
-             f"{met.get('inliers', 0)} inliers 3D | dt {met.get('dt_ms', '-')} ms | {res.get('total_time_ms', 0):.0f} ms")
-    cv2.putText(vis, line1, (12, h + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 230, 180), 1, cv2.LINE_AA)
-    cv2.putText(vis, line2, (12, h + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
+             f"{met.get('inliers', 0)} coherentes | marcadores comunes {mk.get('used', [])} | "
+             f"a mano {(met.get('manual_pairs') or {}).get('valid', 0)} | dt {met.get('dt_ms', '-')} ms")
+    cv2.putText(vis, line1, (12, h + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 230, 180), 1, cv2.LINE_AA)
+    cv2.putText(vis, line2, (12, h + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.47, (220, 220, 220), 1, cv2.LINE_AA)
     cv2.putText(vis, "CAM 1", (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
     cv2.putText(vis, "CAM 2", (w1 + 12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2, cv2.LINE_AA)
     return vis

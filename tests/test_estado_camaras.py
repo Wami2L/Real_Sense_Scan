@@ -84,3 +84,44 @@ def test_guardado_atomico_conserva_el_resto_de_la_config(tmp_path):
     assert saved["extrinsics_cam2_to_cam1"]["quality"] == "buena"
     assert "fitness" not in saved["extrinsics_cam2_to_cam1"]         # no quedan métricas viejas mezcladas
     assert not (tmp_path / "dual.json.tmp").exists()
+
+
+def test_historial_de_calibraciones_y_deshacer():
+    src = SyntheticDualSource(SettingsStore(), lambda f: None)
+    original = src.get_extrinsics().copy()
+    A = np.eye(4)
+    A[:3, 3] = (0.40, 0.05, 0.40)
+    B = np.eye(4)
+    B[:3, 3] = (0.45, 0.06, 0.42)
+    src.set_extrinsics(A, method="primera", quality="aceptable")
+    src.set_extrinsics(B, method="segunda", quality="buena")
+    hist = src.calibration_history()
+    assert [h.get("method") for h in hist[:2]] == ["primera", "verdad de referencia (simulación)"]
+    src.restore_extrinsics(0)                       # deshacer: vuelve a A
+    np.testing.assert_allclose(src.get_extrinsics(), A)
+    assert src.calibration_info()["method"] == "primera"
+    src.restore_extrinsics(0)                       # deshacer otra vez: vuelve a B, no se pierde nada
+    np.testing.assert_allclose(src.get_extrinsics(), B)
+    src.restore_extrinsics(len(src.calibration_history()) - 1)
+    np.testing.assert_allclose(src.get_extrinsics(), original)
+    with pytest.raises(IndexError):
+        src.restore_extrinsics(99)
+
+
+def test_historial_se_guarda_en_disco(tmp_path):
+    rs = pytest.importorskip("pyrealsense2")  # noqa: F841
+    from live3d.capture import DualRealSenseSource
+    cfg = tmp_path / "dual.json"
+    cfg.write_text(json.dumps({"cameras": [{"serial": "A1"}, {"serial": "B2"}],
+                               "extrinsics_cam2_to_cam1": {"matrix_4x4": np.eye(4).tolist(), "is_calibrated": True,
+                                                           "method": "vieja"}}))
+    src = DualRealSenseSource(SettingsStore(), lambda f: None, config_path=str(cfg))
+    T = np.eye(4)
+    T[:3, 3] = (0.3, 0.0, 0.1)
+    src.set_extrinsics(T, method="nueva")
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
+    assert saved["extrinsics_history"][0]["method"] == "vieja"
+    src.restore_extrinsics(0)
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
+    assert saved["extrinsics_cam2_to_cam1"]["method"] == "vieja"
+    assert saved["extrinsics_history"][0]["method"] == "nueva"

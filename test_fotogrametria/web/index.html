@@ -78,6 +78,31 @@
     <!-- Panel Derecho: Estudio de Capturas y Alineación en el Entorno de Cámaras -->
     <aside class="panel-photogrammetry glass" id="panel-photogrammetry">
       
+      <!-- 0. Asistente: pasos para calibrar sin adivinar -->
+      <div class="wizard" id="wizard">
+        <ol class="wz-steps">
+          <li id="wz-1"><span class="wz-n">1</span><span class="wz-t">Montaje</span></li>
+          <li id="wz-2"><span class="wz-n">2</span><span class="wz-t">Previsualizar</span></li>
+          <li id="wz-3"><span class="wz-n">3</span><span class="wz-t">Tomar</span></li>
+          <li id="wz-4"><span class="wz-n">4</span><span class="wz-t">Método</span></li>
+          <li id="wz-5"><span class="wz-n">5</span><span class="wz-t">Alinear</span></li>
+          <li id="wz-6"><span class="wz-n">6</span><span class="wz-t">Guardar</span></li>
+        </ol>
+        <div class="wz-hint" id="wz-hint">Cargando…</div>
+        <div class="wz-row">
+          <label class="wz-check" title="Las cámaras están sujetas y no se van a mover">
+            <input type="checkbox" id="wz-mount-ok"> Montaje fijo
+          </label>
+          <span class="wz-sep"></span>
+          <span class="wz-lbl">Método:</span>
+          <button class="seg-btn active" data-method="auto" title="Marcadores ArUco si los hay, fotogrametría y geometría (ICP)">Automático</button>
+          <button class="seg-btn" data-method="manual" title="Tú marcas el mismo punto en las dos cámaras (4–6 parejas)">Puntos a mano</button>
+          <span class="wz-sep"></span>
+          <a class="btn-tiny" href="/api/markers.pdf?tam=16" target="_blank" title="Hoja A4 con marcadores de 16 cm (uno por página)">🖨️ Marcadores 16 cm</a>
+          <a class="btn-tiny" href="/api/markers.pdf?tam=10" target="_blank" title="Hoja A4 con marcadores de 10 cm (dos por página)">10 cm</a>
+        </div>
+      </div>
+
       <!-- 1. Botones Principales de Captura y Alineación -->
       <div class="studio-actions-group">
         <button id="btn-take-capture" class="btn-action btn-capture" title="Capturar instantáneamente lo que ven ambas cámaras ahora">
@@ -125,8 +150,14 @@
             <button id="vtab-epipolar" class="vtab-btn" title="Ver líneas de nivel epipolar para comprobar alturas">
               📏 Nivel
             </button>
-            <button id="vtab-matches" class="vtab-btn" title="Ver rayos de correspondencia 3D">
-              🎯 Rayos
+            <button id="vtab-matches" class="vtab-btn" title="Ver parejas de puntos (SIFT, marcadores, a mano) y si encajan">
+              🎯 Parejas
+            </button>
+            <button id="vtab-error" class="vtab-btn" title="Mapa de error: distancia entre las superficies de ambas cámaras con la pose">
+              📊 Error
+            </button>
+            <button id="vtab-points" class="vtab-btn" title="Marcar a mano el mismo punto en las dos cámaras">
+              📍 Puntos
             </button>
           </div>
           <span id="visor-badge" class="visor-badge live">🔴 EN DIRECTO</span>
@@ -136,11 +167,33 @@
         <div class="visor-viewport" id="visor-viewport">
           <div id="capture-flash" class="capture-flash"></div>
           <img id="visor-img" src="/api/live_stream" alt="Visor de Cámaras Dual">
+          <!-- Selector de puntos a mano: clic en Cam 1 y luego en el mismo punto en Cam 2 -->
+          <div id="points-picker" class="points-picker hidden">
+            <div class="pp-cam"><div class="pp-lbl">CAM 1 · primero aquí</div>
+              <div class="pp-stage"><img id="pp-img1" alt="Cam 1" draggable="false"><svg id="pp-svg1"></svg></div></div>
+            <div class="pp-cam"><div class="pp-lbl">CAM 2 · luego el mismo punto aquí</div>
+              <div class="pp-stage"><img id="pp-img2" alt="Cam 2" draggable="false"><svg id="pp-svg2"></svg></div></div>
+            <canvas id="pp-loupe" class="pp-loupe hidden" width="160" height="160"></canvas>
+          </div>
           
           <div id="visor-loader" class="visor-loader hidden">
             <div class="spinner"></div>
             <span id="loader-text">Procesando alineación y fusionando cámaras...</span>
           </div>
+        </div>
+
+        <!-- Barra de puntos a mano -->
+        <div id="points-bar" class="points-bar hidden">
+          <div class="pp-head">
+            <span id="pp-status" class="pp-status">Haz clic en un punto de la Cam 1 y luego en el mismo punto de la Cam 2.</span>
+            <button id="pp-undo" class="btn-tiny" title="Quitar el último punto">↶ Deshacer</button>
+            <button id="pp-clear" class="btn-tiny" title="Borrar todas las parejas de esta toma">Borrar</button>
+            <button id="pp-full" class="btn-tiny" title="Ver las cámaras a pantalla completa para marcar con precisión">⛶</button>
+            <button id="pp-align" class="btn-tiny primary" disabled>Alinear con 0 parejas</button>
+          </div>
+          <div class="pp-tips">Elige esquinas o detalles nítidos sobre superficies planas (no en bordes de objetos), repartidos por
+            la escena y a distintas profundidades. La lupa ayuda a afinar.</div>
+          <ol id="pp-list" class="pp-list"></ol>
         </div>
 
         <!-- Barra de Control de Opacidad de Fusión 2D (Visible en modo Fusión 2D) -->
@@ -182,6 +235,12 @@
             <div class="pf-cell" title="Desfase entre cámaras y parte de la imagen que cambia entre análisis">
               <span class="pf-lbl">Δt · movimiento</span><span id="pf-sync" class="pf-val">--</span>
             </div>
+            <div class="pf-cell" title="Marcadores ArUco detectados: los comunes a ambas cámaras dan la pose directamente">
+              <span class="pf-lbl">Marcadores</span><span id="pf-markers" class="pf-val">--</span>
+            </div>
+            <div class="pf-cell" title="Puntos de interés en la zona común: lo que tendrá la fotogrametría (SIFT)">
+              <span class="pf-lbl">Textura común</span><span id="pf-texture" class="pf-val">--</span>
+            </div>
           </div>
           <ul id="pf-issues" class="pf-issues"></ul>
           <div class="pf-legend">
@@ -201,6 +260,7 @@
           <div class="captures-title">
             <span>🎞️ Galería de Tomas (<span id="captures-count">0</span>)</span>
           </div>
+          <button id="btn-align-multi" class="btn-tiny primary" disabled title="Marca 2 o más tomas (casilla «multi») de la misma escena quieta">Alinear con 0 tomas</button>
           <button id="btn-clear-captures" class="btn-tiny" title="Borrar todas las capturas del historial">Vaciar Galería</button>
         </div>
 
@@ -226,6 +286,46 @@
           <span id="m-time" class="m-val">-- ms</span>
         </div>
       </div>
+
+      <!-- 4b. Detalle de la alineación: qué se probó, qué ganó y por qué -->
+      <details class="align-detail" id="align-detail" open>
+        <summary>🔎 Detalle de la alineación</summary>
+        <div id="ad-summary" class="ad-summary"><p>Aún no hay alineación. Toma una captura y pulsa «Alinear».</p></div>
+        <div id="ad-error" class="ad-error"></div>
+        <div class="ad-block">
+          <div class="ad-title">Hipótesis probadas <span class="dim">(★ = la elegida)</span></div>
+          <div class="ad-scroll"><table id="ad-candidates" class="ad-table"></table></div>
+        </div>
+        <div class="ad-block">
+          <div class="ad-title">Parejas de puntos <span class="dim">(residuo 3D con la pose elegida)</span>
+            <span class="ad-filters">
+              <button class="seg-btn small active" data-kind="all">Todas</button>
+              <button class="seg-btn small" data-kind="manual">A mano</button>
+              <button class="seg-btn small" data-kind="marcador">Marcadores</button>
+              <button class="seg-btn small" data-kind="sift">SIFT</button>
+            </span>
+          </div>
+          <div class="ad-scroll"><table id="ad-corr" class="ad-table"></table></div>
+        </div>
+      </details>
+
+      <details class="glossary">
+        <summary>❓ ¿Qué significa cada cosa?</summary>
+        <dl>
+          <dt>Alineación</dt><dd>Calcular dónde está la Cam 2 respecto a la Cam 1 (desplazamiento y giro) para que sus nubes encajen.</dd>
+          <dt>Consistencia</dt><dd>De los puntos que ven las dos cámaras, qué porcentaje coincide al proyectarlos en la otra (dentro del ruido del sensor). ≥ 85 % buena, ≥ 70 % aceptable.</dd>
+          <dt>Puntos comunes</dt><dd>Cuántos puntos (rejilla de 1 cm) ven ambas cámaras y coinciden. Cuantos más, más fiable.</dd>
+          <dt>RMSE</dt><dd>Distancia media entre la superficie que mide una cámara y la que mide la otra en la zona común. Compárala con el ruido esperado.</dd>
+          <dt>Ruido esperado (D455)</dt><dd>Crece con la distancia al cuadrado: ~2 mm a 1 m, ~9 mm a 2 m, ~21 mm a 3 m. Por eso conviene calibrar a 0,8–2 m.</dd>
+          <dt>Fotogrametría (SIFT)</dt><dd>Busca el mismo detalle de color en las dos fotos. Falla con más de ~35° entre cámaras o con texturas repetidas (ladrillo, cuadros): por eso casi no encuentra parejas en tu montaje.</dd>
+          <dt>Marcadores ArUco</dt><dd>Cuadrados impresos con un número. Cada uno da 4 esquinas inequívocas aunque las cámaras estén muy giradas. Es lo más fiable: imprímelos, pégalos planos y que los vean ambas.</dd>
+          <dt>Puntos a mano</dt><dd>Tú indicas qué punto es cuál en cada cámara. Con 4–6 parejas sale la pose; si una está mal, se descarta y se avisa.</dd>
+          <dt>ICP</dt><dd>«Punto más cercano, repetido»: desde una pose aproximada acerca la nube de la Cam 2 a la de la Cam 1 hasta que encajan. Muy preciso, pero necesita empezar cerca (pocos cm y grados).</dd>
+          <dt>FPFH / búsqueda de montaje</dt><dd>Buscan la pose solo por la forma 3D cuando no hay otra pista. Pueden confundirse en escenas simétricas, por eso exigen más zona común.</dd>
+          <dt>Mapa de error</dt><dd>Cada píxel de la Cam 1 coloreado por la distancia a la superficie de la Cam 2: verde &lt; 5 mm, amarillo 5–10, naranja 10–20, rojo &gt; 20 mm.</dd>
+          <dt>Multi-toma</dt><dd>Alinea varias tomas de una escena quieta y promedia las poses: reduce el error y descarta una toma rara.</dd>
+        </dl>
+      </details>
 
       <!-- 5. Sliders de Ajuste Manual Fino en Vivo (Directo a Three.js en caliente) -->
       <div class="sliders-section">
@@ -316,9 +416,17 @@
         </div>
       </div>
 
+      <!-- 6. Historial de calibraciones (deshacer) -->
+      <div class="history-box">
+        <div class="captures-header">
+          <span>🕘 Historial de calibraciones</span>
+          <button id="btn-undo-calib" class="btn-tiny" disabled title="Volver a la calibración anterior (se puede rehacer)">↶ Deshacer último cambio</button>
+        </div>
+        <ul id="history-list" class="history-list"><li class="dim">Cargando…</li></ul>
+      </div>
     </aside>
   </main>
 
-  <script src="/app.js?v=2"></script>
+  <script src="/app.js?v=3"></script>
 </body>
 </html>

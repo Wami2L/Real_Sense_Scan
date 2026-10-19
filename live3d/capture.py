@@ -820,9 +820,12 @@ class _DualMixin:
         ext["persisted"] = bool(self.config_path)
         return ext
 
+    HISTORY_MAX = 20
+
     def set_extrinsics(self, matrix_4x4, **info):
         """Fija T(cam2 -> cam1) y la guarda de forma atómica. `info` (método, calidad, métricas)
-        sustituye a los metadatos de la calibración anterior para que no queden mezclados."""
+        sustituye a los metadatos de la calibración anterior para que no queden mezclados.
+        La calibración anterior pasa al principio de `extrinsics_history` (últimas HISTORY_MAX)."""
         T = np.asarray(matrix_4x4, dtype=np.float64)
         if T.shape != (4, 4) or not np.all(np.isfinite(T)):
             raise ValueError("matriz 4x4 inválida")
@@ -833,6 +836,11 @@ class _DualMixin:
                  "matrix_4x4": T.tolist()}
         entry.update({k: v for k, v in info.items() if v is not None})
         with self._config_lock:
+            old = self.config.get("extrinsics_cam2_to_cam1")
+            if old and old.get("matrix_4x4") is not None and old.get("is_calibrated"):
+                hist = self.config.setdefault("extrinsics_history", [])
+                hist.insert(0, old)
+                del hist[self.HISTORY_MAX:]
             self.config["extrinsics_cam2_to_cam1"] = entry
             if self.config_path:
                 tmp = self.config_path + ".tmp"
@@ -841,6 +849,26 @@ class _DualMixin:
                     json.dump(self.config, f, indent=4, ensure_ascii=False)
                 os.replace(tmp, self.config_path)
         return entry
+
+    def calibration_history(self):
+        """Calibraciones anteriores (la más reciente primero), con su matriz."""
+        with self._config_lock:
+            return [dict(e) for e in self.config.get("extrinsics_history", [])]
+
+    def restore_extrinsics(self, index=0):
+        """Vuelve a una calibración del historial (0 = la anterior: deshacer). La actual pasa al
+        historial, así que deshacer dos veces vuelve a donde estabas: no se pierde nada."""
+        hist = self.calibration_history()
+        if not 0 <= index < len(hist):
+            raise IndexError("no hay esa calibración en el historial")
+        entry = dict(hist[index])
+        with self._config_lock:  # quitarla del historial antes de que set_extrinsics meta la actual
+            self.config["extrinsics_history"].pop(index)
+        mat = entry.pop("matrix_4x4")
+        for k in ("is_calibrated", "calibration_date", "persisted"):
+            entry.pop(k, None)
+        entry["restored_from"] = hist[index].get("calibration_date")
+        return self.set_extrinsics(mat, **entry)
 
     # ---- modo de vista ----
     def set_active_camera(self, idx):
