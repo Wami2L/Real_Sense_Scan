@@ -15,7 +15,7 @@ def render_thumbnail(mesh, size=320, azimuth_deg=35.0, elevation_deg=25.0, bg=(2
     m = o3d.geometry.TriangleMesh(mesh)
     if not m.has_vertex_normals():
         m.compute_vertex_normals()
-    n_pts = int(min(400000, max(40000, len(m.triangles) * 3)))
+    n_pts = 250000  # densidad fija: sin huecos entre puntos sea cual sea la malla
     pcd = m.sample_points_uniformly(n_pts)
     P, N = np.asarray(pcd.points), np.asarray(pcd.normals)
     C = np.asarray(pcd.colors) if pcd.has_colors() else np.full((len(P), 3), 0.75)

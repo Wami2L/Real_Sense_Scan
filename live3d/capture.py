@@ -1283,20 +1283,37 @@ class DualRealSenseSource(_DualMixin, BaseSource):
             if req is None or cam_idx in req["dual_snaps"]:
                 return
             req["dual_snaps"][cam_idx] = snap
-            if len(req["dual_snaps"]) < 2:
-                return
-            s0, s1 = req["dual_snaps"][0], req["dual_snaps"][1]
-            if s0["global_time"] and s1["global_time"]:
-                dt_s, dt_source = (s1["frame_timestamp_ms"] - s0["frame_timestamp_ms"]) / 1000.0, "hardware (global_time)"
-            else:
-                dt_s, dt_source = s1["arrival_s"] - s0["arrival_s"], "llegada al host"
-            s1["timestamp"] = s0["timestamp"] + dt_s
+            self._try_complete(req)
+
+    def _try_complete(self, req):
+        """Responde la petición de snapshot si ya están los cuadros de todas las cámaras EN VIVO
+        (con una cámara caída, responde con la otra). Se llama con _capture_lock tomado."""
+        snaps = req["dual_snaps"]
+        live = {c["idx"] for c in self.cameras_status() if c["state"] == "streaming"} or {0, 1}
+        if not live.issubset(snaps):
+            return  # faltan cuadros de alguna cámara que está en vivo
+        if len(snaps) < 2:
+            # solo una cámara en vivo (la otra caída): snapshot de una sola cámara
+            only = next(iter(snaps.values()))
             self._capture_req = None
-            req["result"] = {"cam1": s0, "cam2": s1, "color": s0["color"], "depth": s0["depth"],
-                             "heat": s0["heat"], "intrinsics": s0["intrinsics"], "depth_scale": s0["depth_scale"],
-                             "timestamp": s0["timestamp"], "dt_ms": round(abs(dt_s) * 1000.0, 1),
-                             "dt_source": dt_source, "extrinsics": self.get_extrinsics()}
+            req["result"] = {f"cam{only['cam_idx'] + 1}": only, "color": only["color"], "depth": only["depth"],
+                             "heat": only["heat"], "intrinsics": only["intrinsics"],
+                             "depth_scale": only["depth_scale"], "timestamp": only["timestamp"],
+                             "dt_ms": None, "extrinsics": self.get_extrinsics(), "degraded": True}
             req["event"].set()
+            return
+        s0, s1 = snaps[0], snaps[1]
+        if s0["global_time"] and s1["global_time"]:
+            dt_s, dt_source = (s1["frame_timestamp_ms"] - s0["frame_timestamp_ms"]) / 1000.0, "hardware (global_time)"
+        else:
+            dt_s, dt_source = s1["arrival_s"] - s0["arrival_s"], "llegada al host"
+        s1["timestamp"] = s0["timestamp"] + dt_s
+        self._capture_req = None
+        req["result"] = {"cam1": s0, "cam2": s1, "color": s0["color"], "depth": s0["depth"],
+                         "heat": s0["heat"], "intrinsics": s0["intrinsics"], "depth_scale": s0["depth_scale"],
+                         "timestamp": s0["timestamp"], "dt_ms": round(abs(dt_s) * 1000.0, 1),
+                         "dt_source": dt_source, "extrinsics": self.get_extrinsics()}
+        req["event"].set()
 
     def capture_dual_scan(self, timeout=8.0):
         """Captura simultáneamente de ambas cámaras y fusiona las nubes en Saves/."""
@@ -1304,6 +1321,8 @@ class DualRealSenseSource(_DualMixin, BaseSource):
         import open3d as o3d
 
         dual_snap = self.get_snapshot(timeout=timeout)
+        if dual_snap.get("cam1") is None or dual_snap.get("cam2") is None:
+            raise RuntimeError("La captura dual necesita las dos cámaras en vivo (ahora solo hay una)")
         snap1 = dual_snap["cam1"]
         snap2 = dual_snap["cam2"]
         T_2_to_1 = self.get_extrinsics()

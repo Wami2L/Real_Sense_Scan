@@ -636,6 +636,8 @@ async def api_dual_auto_align(request):
     try:
         dual_snap = await loop.run_in_executor(None, src.get_snapshot, 6.0)
         from .alignment import RGBDView, align_pair, public_result
+        if dual_snap.get("cam1") is None or dual_snap.get("cam2") is None:
+            return web.json_response({"status": "error", "message": "Hacen falta las dos cámaras en vivo"}, status=409)
         v1 = RGBDView.from_snapshot(dual_snap["cam1"], "Cam 1")
         v2 = RGBDView.from_snapshot(dual_snap["cam2"], "Cam 2")
         prior = src.get_extrinsics() if src.calibration_info().get("is_calibrated") else None

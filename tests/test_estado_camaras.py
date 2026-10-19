@@ -125,3 +125,37 @@ def test_historial_se_guarda_en_disco(tmp_path):
     saved = json.loads(cfg.read_text(encoding="utf-8"))
     assert saved["extrinsics_cam2_to_cam1"]["method"] == "vieja"
     assert saved["extrinsics_history"][0]["method"] == "nueva"
+
+
+def test_snapshot_dual_con_una_camara_caida_usa_la_otra(tmp_path):
+    pytest.importorskip("pyrealsense2")
+    import threading
+    from live3d.capture import DualRealSenseSource
+    cfg = tmp_path / "dual.json"
+    cfg.write_text(json.dumps({"cameras": [{"serial": "A1"}, {"serial": "B2"}]}))
+    src = DualRealSenseSource(SettingsStore(), lambda f: None, config_path=str(cfg))
+
+    def snap(idx):
+        return {"color": np.zeros((4, 4, 3), np.uint8), "depth": np.zeros((4, 4), np.uint16), "heat": None,
+                "intrinsics": {"width": 4, "height": 4, "fx": 2, "fy": 2, "ppx": 1.5, "ppy": 1.5},
+                "depth_scale": 0.001, "timestamp": 1.0, "arrival_s": 1.0 + idx * 0.01,
+                "frame_timestamp_ms": 0.0, "global_time": False, "cam_idx": idx}
+
+    # las dos en vivo: con un solo cuadro todavía no responde
+    src._set_cam(0, state="streaming"); src._cam_frame(0)
+    src._set_cam(1, state="streaming"); src._cam_frame(1)
+    req = {"event": threading.Event(), "result": None, "error": None, "dual_snaps": {0: snap(0)}}
+    src._capture_req = req
+    src._try_complete(req)
+    assert not req["event"].is_set()
+    req["dual_snaps"][1] = snap(1)
+    src._try_complete(req)
+    assert req["event"].is_set() and set(req["result"]) >= {"cam1", "cam2"} and req["result"]["dt_ms"] == 10.0
+
+    # Cam 1 desconectada: responde solo con la Cam 2
+    src._set_cam(0, state="no_device")
+    req = {"event": threading.Event(), "result": None, "error": None, "dual_snaps": {1: snap(1)}}
+    src._capture_req = req
+    src._try_complete(req)
+    assert req["event"].is_set() and req["result"].get("degraded")
+    assert "cam2" in req["result"] and "cam1" not in req["result"]

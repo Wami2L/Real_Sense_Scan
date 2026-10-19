@@ -168,9 +168,8 @@ class ObjectScanSession:
             if self.shots >= self.MAX_SHOTS:
                 raise RuntimeError(f"Máximo {self.MAX_SHOTS} tomas por objeto.")
             shot = self.shots
-            parts = [("cam1", snap.get("cam1", snap))]
-            if snap.get("cam2") is not None:
-                parts.append(("cam2", snap["cam2"]))
+            # simple (sin cam1/cam2), dual, o dual con una sola cámara en vivo
+            parts = [(k, snap[k]) for k in ("cam1", "cam2") if snap.get(k) is not None] or [("cam1", snap)]
             new = []
             for cam, s in parts:
                 v = ObjView(len(self.views) + len(new), shot, cam, rectify_snapshot(s))

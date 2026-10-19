@@ -60,7 +60,7 @@ def setup_objscan_routes(app, library=None):
         return app.get("objscan")
 
     def _snap_cam1(snap):
-        return snap.get("cam1", snap)
+        return snap.get("cam1") or snap.get("cam2") or snap
 
     async def page(_r):
         return web.FileResponse(os.path.join(WEB_DIR, "index.html"))
@@ -107,7 +107,9 @@ def setup_objscan_routes(app, library=None):
         info, img = await loop.run_in_executor(None, work)
         out = {k: v for k, v in info.items() if k not in ("mask", "T_cam_to_base", "snap")}
         out["imagen"] = _jpeg_data_url(img)
-        out["dual"] = snap.get("cam2") is not None
+        out["dual"] = snap.get("cam1") is not None and snap.get("cam2") is not None
+        if snap.get("degraded"):
+            out["warnings"] = out.get("warnings", []) + ["Solo una cámara en vivo: se escanea con ella."]
         out["simulada"] = bool(getattr(src, "simulated", False))
         return web.json_response(out)
 

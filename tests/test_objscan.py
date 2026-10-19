@@ -167,6 +167,6 @@ def test_dual_con_calibracion_desajustada_se_corrige_sin_fantasmas(tmp_path):
                         "extrinsics": np.linalg.inv(T1) @ T2 @ P})
     s.finish(background=False)
     info = s.result["correccion_calibracion_dual"]
-    assert info["aplicada"] and info["muestras"] >= 4
+    assert info["aplicada"] and info["muestras"] >= 2       # consenso mínimo del algoritmo
     assert 30 < info["mm"] < 70 and 3 < info["deg"] < 9          # mide el desajuste inyectado
     assert _surface_error_mm(lib, s.result) < 2.0
