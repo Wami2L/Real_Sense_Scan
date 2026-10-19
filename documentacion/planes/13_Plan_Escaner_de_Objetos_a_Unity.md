@@ -1,7 +1,7 @@
 # Plan 13: Escáner de objetos → Blender → Unity (VR ScanWorld)
 
 > **Rama:** `Pre_Produccion` · **Proyecto Unity:** `C:\Users\Usuario\Documents\Proyectos Unity\VR ScanWorld` (Unity 6000.3.8f1, URP 17.3)
-> **Fecha:** 2026-10-19 · **Estado:** en ejecución (se prueba con el escáner el 2026-10-20)
+> **Fecha:** 2026-10-19 · **Estado:** implementado y verificado sin hardware; prueba con el escáner el 2026-10-20
 
 ---
 
@@ -85,3 +85,48 @@ Prioridad: **Unity y la calidad del objeto capturado**. El resto del sistema (Li
 | Objetos pequeños (< 8 cm) cerca del Min-Z (0,52 m) con resolución insuficiente. | Mostrar el tamaño estimado en el encuadre y la distancia recomendada. |
 | Los marcadores no se ven en algunas vistas (tapados por el objeto). | 6–8 marcadores alrededor; basta con 1 visible. Si no hay ninguno, cae a ICP desde la vista anterior. |
 | Shaders URP escritos sin abrir el editor. | Verificación en *batchmode* (compilación y render a PNG). |
+
+---
+
+## 7. Estado (2026-10-19)
+
+Todas las fases (O0-O8) están implementadas. Se verificaron sin escáner con la escena sintética (verdad de
+referencia), en el navegador, en Blender 4.5/5.2 en segundo plano y en Unity 6 en modo batch.
+
+### Resultados medidos (escena sintética con ruido de la D455)
+
+| Prueba | Resultado |
+|---|---|
+| Pose de la cámara por la base (PnP) | 1,4-3,3 mm · 0,2° desde varios ángulos; escala de la hoja medida al 0,1 % |
+| Hoja impresa al 90 % | detectada (relación 0,90) y corregida |
+| Superficie reconstruida, con base (10 tomas) | **0,9 mm** de error medio frente al objeto real; medidas ±2 mm |
+| Superficie reconstruida, sin base (14 tomas) | **1,0 mm** |
+| Dual con calibración desajustada 3-6 cm / 4-8° (Cam 2 sin ver la base) | corregida con todas las tomas: **0,9 mm**; el escaneo mide el desajuste |
+| Lente con distorsión (brown e inverse brown) | rectificada; la pose vuelve a la precisión sin distorsión |
+| Ida y vuelta Blender (abrir → limpiar → publicar) | ejes y medidas idénticos; RSM regenerado desde `objeto_limpio.ply` |
+| Unity: efecto (8 fotogramas a PNG) y tests en modo juego | partículas → revelado → destello; el enlace descarga la versión de Blender y la galería la construye |
+
+### Decisiones tomadas con datos
+
+- **ICP point-to-plane, no con color.** Con luz fija y objeto girando, el sombreado cambia entre tomas. El ICP
+  con color se desviaba 33 mm desde la pose correcta y el point-to-plane 0,5 mm. El color solo desempata
+  hipótesis, como cromaticidad (sin intensidad).
+- **El refinado nunca empeora una pose por base**: solo acepta retoques pequeños que mejoren la métrica fina.
+- **Calibración dual**: se estima UNA corrección común para todas las tomas. Exige consenso entre tomas, y si
+  no lo hay, las vistas de la Cam 2 que no encajan se excluyen en lugar de dejar fantasmas.
+
+### Para la prueba con hardware (2026-10-20)
+
+Seguir `documentacion/GUIA_ESCANER_OBJETOS.md`. Qué observar y anotar:
+1. Chip "Base": cuántos marcadores se ven a 0,6-0,9 m y si la escala de la hoja sale ≈ 100 %.
+2. Encaje por toma (miniaturas) y origen de la pose (`base` en casi todas).
+3. Con las dos cámaras: la línea "Calibración dual" del resultado (desajuste medido). Si es grande y el
+   objeto sale limpio, probar «Actualizar la calibración dual».
+4. Objetos oscuros o brillantes: aviso de silueta sin profundidad.
+
+### Pendiente / siguientes pasos
+
+- Validar con la D455 real el rendimiento del encuadre (~3 fps con snapshot dual completo) y la
+  rectificación con los coeficientes reales.
+- VR: XR Plugin Management + OpenXR (o Meta XR) y un XR Origin en la escena ScanWorld.
+- Texturas UV (ahora color por vértice) si se quiere más detalle de color con mallas ligeras.

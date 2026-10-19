@@ -20,6 +20,7 @@ En esta carpeta se recopilan las propuestas arquitectónicas, planes técnicos, 
 | **10** | Plan de Optimización y Consolidación para Pre-Producción | **En curso** | [MD](10_Plan_Optimizacion_Pre_Produccion.md) |
 | **11** | Ecosistema Unificado: Estudio y Live 3D en un Solo Servidor | **Propuesta** | [MD](11_Plan_Ecosistema_Unificado_Estudio_Live3D.md) |
 | **12** | Alineación Guiada: Marcadores, Puntos a Mano e Interfaz Explicativa | **Implementado · en refinamiento** | [MD](12_Plan_Alineacion_Guiada_Marcadores_y_Puntos.md) |
+| **13** | Escáner de Objetos → Blender → Unity (VR ScanWorld) | **Implementado · a probar con hardware** | [MD](13_Plan_Escaner_de_Objetos_a_Unity.md) · [Guía](../GUIA_ESCANER_OBJETOS.md) |
 
 ---
 

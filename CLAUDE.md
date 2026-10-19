@@ -24,11 +24,26 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
   +0.25 m en x sin rotación: es la verdad de referencia de los tests de alineación.
 - Si 5002 arranca en simulación por falta de cámaras, cambia solo a las reales al conectarlas (`device_watch_task`).
 
-## Arquitectura actual (dos procesos)
+## Arquitectura actual (tres procesos)
 | Proceso | Puerto | Entrada | Rol |
 |---|---|---|---|
-| Live3D (aiohttp) | 5002 | `app.py` → `live3d/server.py` | Captura, WebSocket binario `/ws`, API REST `/api/*`, visor Three.js |
+| Live3D (aiohttp) | 5002 | `app.py` → `live3d/server.py` | Captura, `/ws`, API `/api/*`, visor Three.js y **escáner de objetos `/objetos`** |
 | Estudio de calibración (aiohttp) | 5005 | `test_fotogrametria/servidor_test.py` | Cliente WS de 5002, galería de tomas, alineación SIFT+ICP, overlays |
+| Enlace Unity (aiohttp) | 5010 | `python -m live3d.unity_link` | Sirve la biblioteca de objetos a Unity; solo 127.0.0.1 o red con token |
+
+### Escáner de objetos (prioridad actual, plan 13) — `live3d/objscan/`
+- Ruta: escanear en `/objetos` → (Blender opcional) → publicar → Unity (VR ScanWorld) lo construye con partículas.
+- `base.py`: hoja de marcadores ArUco **ids 10-17** (los 0-3 son de calibración); pose de cámara por PnP con la
+  geometría de la hoja y escala medida con la profundidad. PDFs en `imprimibles/` y en `/objetos-ui/base_escaneo_A3.pdf`.
+- Marco "base" del objeto: metros, **Y arriba**, diestro, pivote en el centro de la base. Blender: forward -Z / up Y.
+  Unity (`.rsm`): z → -z y orden de triángulos invertido (ya hecho al escribir el archivo).
+- `optica.py`: rectifica color+profundidad (coeficientes de la lente en las intrínsecas del snapshot) ANTES de nada.
+- `segment.py`: objeto = volumen de trabajo (cilindro sobre la base) o, sin base, plano de la mesa + grupo central.
+- `session.py`: poses base > calibración (Cam 2) > icp > referencia. ICP **point-to-plane** (el ICP con color sesga
+  con luz fija y objeto que gira). Dual: UNA corrección común de la calibración con todas las tomas (consenso) y la
+  Cam 2 se descarta si no encaja. TSDF **uniforme** solo del objeto. Resultado a `Saves/objetos/<id>/`.
+- `library.py` (manifiesto `objeto.json`, `objeto_limpio.ply` de Blender gana), `rsm.py` (formato Unity),
+  `sintetico.py` + `fuente.py` (escena con verdad de referencia; `python app.py --synthetic-object`).
 
 - `live3d/capture.py`: fuentes `RealSenseSource`, `DualRealSenseSource`, `SyntheticSource`, `SyntheticDualSource`.
   Llaman a `on_frame(CapturedFrame)` desde su hilo; snapshots vía `get_snapshot()` (petición al hilo de captura).
@@ -48,17 +63,24 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
 - Extrínsecas: escribirlas siempre con `src.set_extrinsics(T, **metadatos)` (atómico; la simulación no toca disco).
 - `multiscan.py`: sesión multi-vista (pose graph + Poisson). `generar_malla_offline.py`: Delaunay 2.5D.
 - `RealSense_Importer.py`: addon de Blender ≥ 4.0 (probado en 4.5 y 5.2) que importa scan_/dual_scan_/multi_ con ejes,
-  marcos (Cam 2 y vistas con su pose), cámaras y color. `script_blender.py` solo lo envuelve para importar el último escaneo.
+  marcos (Cam 2 y vistas con su pose), cámaras y color, y panel **Objetos escaneados** (abrir, limpieza rápida que cierra
+  la base, «Publicar en Unity» = `objeto_limpio.ply` triangulado + versión +1). `script_blender.py -- --objeto <id>`
+  lo usa el botón «Abrir en Blender» de /objetos.
   Usan `bpy`: no importarlos fuera de Blender. Probar con `blender -b --factory-startup --python <script>`.
 - Convención extrínseca: `T_cam2_to_cam1` (4×4, metros), `X_cam1 = T · X_cam2`. Euler: `R = Ry(yaw)·Rx(pitch)·Rz(roll)`,
   idéntica en `registration.py`, `test_fotogrametria/calibrador.py` y `live3d/web/js/main.js`.
 - Coordenadas RealSense: x derecha, y abajo, z adelante. Three.js: (x,-y,-z). Blender: (x,z,-y).
 
 ## Proyecto Unity asociado
-- `C:\Users\Usuario\Documents\Proyectos Unity\VR ScanWorld` — Unity **6000.3.8f1**, URP 17.3, Input System; casi vacío
-  (solo `SampleScene`), sin git propio. Paquete XR base instalado, sin OpenXR/Meta todavía.
-- Conversión de ejes RealSense → Unity (zurdo, y arriba): `(x, y, z)_unity = (x, -y, z)` en metros; para matrices
-  `T_unity = S · T · S` con `S = diag(1, -1, 1)`.
+- `C:\Users\Usuario\Documents\Proyectos Unity\VR ScanWorld` — Unity **6000.3.8f1**, URP 17.3, solo Input System nuevo,
+  espacio lineal. Git **local** propio (sin remoto). Sin OpenXR/Meta todavía.
+- Paquete `Assets/ScanWorld/` (ver su `LEEME.md`): `ScanLinkClient` (consulta 5010), `RsmLoader`, `ScanGallery`
+  (pedestales), `ScanBuildEffect` + shaders URP `ScanWorld/BuildParticles` y `ScanWorld/BuildSolid` (sin VFX Graph ni
+  geometry shaders), importador `.rsm`, menú ScanWorld. Escena `Assets/ScanWorld/Scenes/ScanWorld.unity`.
+- Verificar sin abrir el editor (Unity cerrado): `Unity.exe -batchmode -projectPath <proyecto> -executeMethod
+  ScanWorld.EditorTools.ScanWorldSetup.BatchCapture` (PNG en `ScanWorldCapturas/`), `...BatchTestLink`, y
+  `-runTests -testPlatform PlayMode` (el test del enlace se ignora si 5010 no responde).
+- Ejes RealSense (cámara) → Unity: `(x, -y, z)`. Objetos escaneados: ya vienen en Unity dentro del `.rsm`.
 
 ## Código legado / no usar como referencia
 - `app_legacy_flask.py`, `camera_manager.py`, `templates/`, `static/` — interfaz Flask antigua.
@@ -74,8 +96,11 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
 ## Comandos
 ```bash
 instalar_dependencias.bat          # crea .venv e instala requirements.txt
-iniciar_sistema.bat                # lanza 5002 + 5005 y abre el navegador
+iniciar_sistema.bat                # lanza 5002 + 5005 + 5010 y abre /objetos
 python app.py --synthetic --dual   # desarrollo sin cámaras
+python app.py --synthetic-object   # escáner de objetos sin cámaras (plato giratorio simulado)
+python -m live3d.unity_link        # enlace con Unity (5010); --red para otros equipos (token)
+python tools/generar_base_escaneo.py --hoja A3   # hoja imprimible de la base de escaneo
 python -m live3d.tools.probe_client  # cliente WS de prueba
 python -m pip install -r requirements-dev.txt
 python -m pytest                   # tests de humo (lanzan su propio servidor sintético en un puerto libre)
@@ -90,3 +115,5 @@ python test_fotogrametria/test_cli.py --all-saves # motor de alineación sobre l
 `documentacion/planes/11_Plan_Ecosistema_Unificado_Estudio_Live3D.md` — siguiente paso: estudio y Live 3D en un solo
 servidor con el estudio como interfaz principal (fases U0–U5).
 `documentacion/planes/12_Plan_Alineacion_Guiada_Marcadores_y_Puntos.md` — alineación guiada (implementada; §6 = qué refinar).
+`documentacion/planes/13_Plan_Escaner_de_Objetos_a_Unity.md` — **prioridad**: escáner de objetos → Blender → Unity.
+Guía de uso: `documentacion/GUIA_ESCANER_OBJETOS.md`.
