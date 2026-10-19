@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Escáner de Objetos · RealSenseScans</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/objetos-ui/objetos.css?v=1">
+  <script type="importmap">
+    { "imports": {
+        "three": "/assets/vendor/three.module.min.js",
+        "three/addons/controls/OrbitControls.js": "/assets/vendor/OrbitControls.js"
+    } }
+  </script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="m3 7 9 5 9-5"/><path d="M12 12v10"/></svg>
+      </div>
+      <div>
+        <h1>Escáner de objetos</h1>
+        <p>Captura → Blender → Unity</p>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab on" data-tab="escanear" role="tab">Escanear</button>
+      <button class="tab" data-tab="biblioteca" role="tab">Biblioteca <span id="lib-count" class="count">0</span></button>
+    </nav>
+    <div class="top-right">
+      <span id="cam-pill" class="pill" data-state="connecting"><i></i><span>Cámara…</span></span>
+      <a class="ext" href="/" title="Visor Live 3D">Live 3D ↗</a>
+      <a class="ext" href="http://localhost:5005" title="Estudio de calibración de las dos cámaras">Calibración ↗</a>
+    </div>
+  </header>
+
+  <!-- ===================== ESCANEAR ===================== -->
+  <main id="view-escanear" class="layout">
+    <section class="stage">
+      <img id="encuadre" alt="Encuadre: el objeto aparece resaltado en verde">
+      <canvas id="visor3d" class="hidden"></canvas>
+      <div class="chips" id="chips"></div>
+      <ul class="warnings" id="warnings"></ul>
+      <div class="stage-empty hidden" id="stage-empty">Esperando la cámara…</div>
+    </section>
+
+    <aside class="panel">
+      <!-- Paso 1 -->
+      <section class="step" data-step="1">
+        <header><span class="num">1</span><h2>Objeto</h2><span class="state" id="s1-state"></span></header>
+        <div class="body">
+          <label class="field">Nombre
+            <input id="nombre" type="text" maxlength="60" placeholder="p. ej. Taza azul">
+          </label>
+          <label class="field">Base de marcadores
+            <select id="hoja">
+              <option value="A3">Hoja A3 (recomendada)</option>
+              <option value="A4">Hoja A4 (objetos pequeños)</option>
+              <option value="sin_base">Sin base (menos preciso)</option>
+            </select>
+          </label>
+          <div class="field">
+            <div class="row"><span>Radio del volumen</span><b id="v-radio">15 cm</b></div>
+            <input id="radio" type="range" min="4" max="60" step="1" value="15">
+          </div>
+          <div class="field">
+            <div class="row"><span>Altura del volumen</span><b id="v-altura">35 cm</b></div>
+            <input id="altura" type="range" min="4" max="100" step="1" value="35">
+          </div>
+          <p class="help">Coloca el objeto en el centro de la hoja. Todo lo que quede fuera del cilindro azul se ignora.
+            <a href="/objetos-ui/base_escaneo_A3.pdf" target="_blank">Hoja A3</a> ·
+            <a href="/objetos-ui/base_escaneo_A4.pdf" target="_blank">Hoja A4</a></p>
+          <button id="btn-empezar" class="primary">Empezar escaneo</button>
+        </div>
+      </section>
+
+      <!-- Paso 2 -->
+      <section class="step" data-step="2">
+        <header><span class="num">2</span><h2>Tomas</h2><span class="state" id="s2-state"></span></header>
+        <div class="body">
+          <p class="hint" id="consejo">Gira el objeto (o muévete alrededor) unos 30° entre tomas. Con 10–14 tomas y una vuelta completa suele bastar.</p>
+          <div class="actions">
+            <button id="btn-tomar" class="primary big">Tomar foto <kbd>Espacio</kbd></button>
+            <button id="btn-deshacer" class="ghost">Deshacer</button>
+          </div>
+          <div class="thumbs" id="thumbs"></div>
+          <div class="actions">
+            <button id="btn-procesar" class="primary">Procesar objeto</button>
+            <button id="btn-descartar" class="ghost danger">Descartar</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Paso 3 -->
+      <section class="step" data-step="3">
+        <header><span class="num">3</span><h2>Procesar</h2><span class="state" id="s3-state"></span></header>
+        <div class="body">
+          <div class="progress"><div id="bar"></div></div>
+          <p class="hint" id="etapa">—</p>
+        </div>
+      </section>
+
+      <!-- Paso 4 -->
+      <section class="step" data-step="4">
+        <header><span class="num">4</span><h2>Resultado</h2><span class="state" id="s4-state"></span></header>
+        <div class="body">
+          <dl class="metrics" id="metrics"></dl>
+          <div class="actions col">
+            <button id="btn-blender" class="ghost">Abrir en Blender para ajustar</button>
+            <button id="btn-publicar" class="primary">Publicar en Unity</button>
+            <button id="btn-otro" class="ghost">Escanear otro objeto</button>
+          </div>
+        </div>
+      </section>
+      <div id="toast" class="toast hidden"></div>
+    </aside>
+  </main>
+
+  <!-- ===================== BIBLIOTECA ===================== -->
+  <main id="view-biblioteca" class="library hidden">
+    <div class="lib-head">
+      <p>Los objetos <b>publicados</b> aparecen en Unity (VR ScanWorld). Si los ajustas en Blender con
+        «Publicar en Unity», Unity recibe la versión limpia.</p>
+    </div>
+    <div class="cards" id="cards"></div>
+  </main>
+
+  <template id="tpl-card">
+    <article class="card">
+      <img class="thumb" alt="">
+      <div class="info">
+        <h3></h3>
+        <p class="meta"></p>
+        <div class="badges"></div>
+      </div>
+      <div class="card-actions">
+        <button data-act="ver" class="ghost sm">Ver</button>
+        <button data-act="blender" class="ghost sm">Blender</button>
+        <button data-act="publicar" class="primary sm">Publicar</button>
+        <button data-act="borrar" class="ghost sm danger" title="Borrar">✕</button>
+      </div>
+    </article>
+  </template>
+
+  <script type="module" src="/objetos-ui/objetos.js?v=1"></script>
+</body>
+</html>

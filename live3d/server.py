@@ -758,7 +758,10 @@ def build_app(args):
 
     async def on_startup(app):
         app["args_single"] = bool(getattr(args, "single", False))
-        if args.synthetic:
+        if getattr(args, "synthetic_object", False):
+            from .objscan.fuente import SyntheticObjectSource
+            cls, msg, fallback = SyntheticObjectSource, "Simulación: objeto en plato giratorio", False
+        elif args.synthetic:
             cls = SyntheticDualSource if getattr(args, "dual", False) else SyntheticSource
             msg, fallback = "Simulación forzada (--synthetic)", False
         else:
@@ -787,7 +790,11 @@ def build_app(args):
     app.router.add_post("/api/reload_camera", api_reload_camera)
     app.router.add_post("/api/client_log", api_client_log)
 
-    # Rutas MultiScan
+    # Escáner de objetos (página /objetos) + biblioteca compartida con Blender y Unity
+    from .objscan.api import setup_objscan_routes
+    setup_objscan_routes(app)
+
+    # Rutas MultiScan (antiguo; la página /objetos lo sustituye para objetos)
     app.router.add_post("/api/multi/start", api_multi_start)
     app.router.add_post("/api/multi/add", api_multi_add)
     app.router.add_post("/api/multi/undo", api_multi_undo)
@@ -843,6 +850,8 @@ def main(argv=None):
     p.add_argument("--decimation", type=int, default=2)
     p.add_argument("--single", action="store_true", help="forzar modo cámara única aunque haya múltiples conectadas")
     p.add_argument("--dual", action="store_true", help="forzar modo cámara dual")
+    p.add_argument("--synthetic-object", action="store_true",
+                   help="simular un objeto en plato giratorio (probar /objetos sin cámara)")
     args = p.parse_args(argv)
 
     actual_port = find_available_port(args.host, args.port)

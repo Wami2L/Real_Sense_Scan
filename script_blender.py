@@ -1,10 +1,11 @@
 """
-Importa en Blender el escaneo más reciente de Saves/ usando el addon RealSense_Importer.py.
+Abre en Blender un escaneo con el addon RealSense_Importer.py (sin instalarlo).
 
-Uso: pestaña Scripting > abrir este archivo > Run Script, o
-     blender --python script_blender.py
-Para elegir otra carpeta, instala el addon (Edit > Preferences > Add-ons > Install from Disk)
-y usa el panel RealSense de la barra lateral del visor 3D.
+    blender --python script_blender.py                         # último escaneo de Saves/
+    blender --python script_blender.py -- --objeto <id>        # objeto de Saves/objetos (lo usa /objetos)
+
+También: pestaña Scripting > abrir este archivo > Run Script. Para usar los paneles a diario,
+instala el addon (Edit > Preferences > Add-ons > Install from Disk > RealSense_Importer.py).
 """
 
 import importlib.util
@@ -19,17 +20,37 @@ if not os.path.isfile(os.path.join(HERE, "RealSense_Importer.py")):
     txt = next((t for t in bpy.data.texts if t.filepath.endswith("script_blender.py")), None)
     HERE = os.path.dirname(bpy.path.abspath(txt.filepath)) if txt else HERE
 
-spec = importlib.util.spec_from_file_location("RealSense_Importer", os.path.join(HERE, "RealSense_Importer.py"))
-rsi = importlib.util.module_from_spec(spec)
-sys.modules["RealSense_Importer"] = rsi
-spec.loader.exec_module(rsi)
-if not hasattr(bpy.types.Scene, "realsense_props"):
-    rsi.register()
-
-folder = rsi.latest_scan(os.path.join(HERE, "Saves"))
-if not folder:
-    print(f"No hay escaneos en {os.path.join(HERE, 'Saves')}")
+if "RealSense_Importer" in sys.modules and hasattr(bpy.types.Scene, "realsense_props"):
+    rsi = sys.modules["RealSense_Importer"]       # addon ya instalado/registrado
 else:
-    bpy.context.scene.realsense_props.folder_path = folder
-    print(f"Importando el último escaneo: {folder}")
-    bpy.ops.realsense.import_scan()
+    spec = importlib.util.spec_from_file_location("RealSense_Importer", os.path.join(HERE, "RealSense_Importer.py"))
+    rsi = importlib.util.module_from_spec(spec)
+    sys.modules["RealSense_Importer"] = rsi
+    spec.loader.exec_module(rsi)
+    if not hasattr(bpy.types.Scene, "realsense_props"):
+        rsi.register()
+
+argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+oid = argv[argv.index("--objeto") + 1] if "--objeto" in argv and argv.index("--objeto") + 1 < len(argv) else None
+
+if oid:
+    # escena limpia: quitar el cubo, la cámara y la luz por defecto si siguen ahí
+    for name in ("Cube",):
+        ob = bpy.data.objects.get(name)
+        if ob:
+            bpy.data.objects.remove(ob, do_unlink=True)
+    ob, man = rsi.open_library_object(oid, bpy.context)
+    print(f"Abierto el objeto «{ob.name}» ({oid}). Panel RealSense > Objetos escaneados > Publicar en Unity.")
+    for area in getattr(bpy.context.screen, "areas", []):
+        if area.type == 'VIEW_3D':
+            with bpy.context.temp_override(area=area, region=next(r for r in area.regions if r.type == 'WINDOW')):
+                bpy.ops.view3d.view_selected()
+            area.spaces[0].show_region_ui = True
+else:
+    folder = rsi.latest_scan(os.path.join(HERE, "Saves"))
+    if not folder:
+        print(f"No hay escaneos en {os.path.join(HERE, 'Saves')}")
+    else:
+        bpy.context.scene.realsense_props.folder_path = folder
+        print(f"Importando el último escaneo: {folder}")
+        bpy.ops.realsense.import_scan()

@@ -172,8 +172,18 @@
             </button>
           </div>
 
-          <!-- Multi-Scan Card -->
-          <div class="multiscan-box" id="multiscan-box">
+          <!-- Escáner de objetos: sustituye al antiguo "Mapeo Multi-Foto" (que queda oculto abajo) -->
+          <a class="multiscan-box" href="/objetos" style="display:block; text-decoration:none; color:inherit;"
+             title="Escanear un objeto, ajustarlo en Blender y publicarlo en Unity">
+            <div class="multi-header">
+              <span style="font-size:0.8rem; font-weight:600;">Escáner de objetos</span>
+              <span class="multi-badge">Abrir ↗</span>
+            </div>
+            <p class="multi-hint">Objeto aislado sobre la base de marcadores, tomas guiadas, malla limpia y envío a Blender / Unity.</p>
+          </a>
+
+          <!-- Antiguo Mapeo Multi-Foto (oculto: main.js aún referencia sus elementos) -->
+          <div class="multiscan-box" id="multiscan-box" style="display:none;">
             <div class="multi-header">
               <span style="font-size:0.8rem; font-weight:600;">Mapeo Multi-Foto</span>
               <span id="multi-count" class="multi-badge">Inactivo</span>

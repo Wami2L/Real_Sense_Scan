@@ -50,3 +50,6 @@ scratch/
 .tempmediaStorage/
 test_fotogrametria/*.jpg
 test_fotogrametria/web/*.jpg
+
+# Enlace privado con Unity (contiene el token)
+config/unity_link.json

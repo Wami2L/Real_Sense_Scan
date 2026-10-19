@@ -128,6 +128,12 @@ class Library:
             mesh.compute_vertex_normals()
         write_rsm(rsm, np.asarray(mesh.vertices), np.asarray(mesh.triangles), np.asarray(mesh.vertex_normals),
                   np.asarray(mesh.vertex_colors) if mesh.has_vertex_colors() else None)
+        try:
+            import cv2
+            from .thumbnail import render_thumbnail
+            cv2.imwrite(self.path(oid, "miniatura.jpg"), render_thumbnail(mesh))
+        except Exception:  # noqa: BLE001  (la miniatura es accesoria)
+            pass
         man = self.get(oid)
         V = np.asarray(mesh.vertices)
         self.update(oid, vertices=int(len(V)), triangulos=int(len(mesh.triangles)),

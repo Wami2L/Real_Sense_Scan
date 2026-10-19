@@ -12,16 +12,19 @@ Los archivos están en coordenadas RealSense (x derecha, y abajo, z adelante, me
 escaneo cuelga de un objeto raíz que los lleva a Blender (Z arriba): (x, y, z) -> (x, z, -y).
 Debajo, la Cam 2 (dual) y cada vista (multi) tienen su propio marco con la pose guardada.
 
+Objetos escaneados (Saves/objetos/<id>/, panel «Objetos escaneados»): abrir, limpieza rápida y
+«Publicar en Unity», que guarda objeto_limpio.ply y marca el objeto como publicado para VR ScanWorld.
+
 Solo usa bpy y la biblioteca estándar: no hace falta instalar nada dentro de Blender.
 """
 
 bl_info = {
     "name": "RealSense Scan Importer",
     "author": "RealSenseScans",
-    "version": (2, 0, 0),
+    "version": (2, 1, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > RealSense",
-    "description": "Importa escaneos de Saves/ (simple, dual y multicaptura) con ejes, color y cámaras.",
+    "description": "Importa escaneos de Saves/ y abre, limpia y publica en Unity los objetos escaneados.",
     "category": "Import-Export",
 }
 
@@ -622,13 +625,261 @@ class REALSENSE_PT_panel(bpy.types.Panel):
             layout.operator("realsense.generate_mesh", icon='MESH_CUBE')
 
 
+# --------------------------------------------------------------------------- #
+# Objetos escaneados (biblioteca Saves/objetos): abrir, limpiar y publicar en Unity
+# --------------------------------------------------------------------------- #
+# Los objetos están en el marco "base": metros, Y arriba, diestro, pivote en el centro de la
+# base. Blender es Z arriba: se importa y exporta con forward -Z / up Y, que equivale a
+# (x, y, z) -> (x, -z, y). El objeto aparece de pie sobre el suelo de Blender.
+AXES = {"forward_axis": 'NEGATIVE_Z', "up_axis": 'Y'}
+
+
+def library_dir():
+    root = project_dir()
+    return os.path.join(root, "Saves", "objetos") if root else None
+
+
+def library_objects():
+    """[(id, manifiesto)] de la biblioteca, más recientes primero."""
+    lib = library_dir()
+    if not lib or not os.path.isdir(lib):
+        return []
+    out = []
+    for oid in sorted(os.listdir(lib), reverse=True):
+        man = _read_json(os.path.join(lib, oid, "objeto.json"))
+        if man:
+            out.append((oid, man))
+    return out
+
+
+def _object_items(self, context):
+    items = [(oid, f"{man.get('nombre', oid)}{'  · Unity' if man.get('publicado') else ''}",
+              f"{oid} · {man.get('triangulos', 0):,} triángulos · {man.get('estado', '')}")
+             for oid, man in library_objects()]
+    return items or [("", "(biblioteca vacía)", "Escanea un objeto en http://localhost:5002/objetos")]
+
+
+def open_library_object(oid, context):
+    lib = library_dir()
+    folder = os.path.join(lib, oid)
+    man = _read_json(os.path.join(folder, "objeto.json")) or {}
+    found = _existing(folder, "objeto_limpio.ply", "objeto.ply")
+    src = found[0] if found else None
+    if not src:
+        raise FileNotFoundError(f"El objeto {oid} no tiene malla")
+    coll = bpy.data.collections.new(f"RS {man.get('nombre', oid)}")
+    context.scene.collection.children.link(coll)
+    before = set(bpy.data.objects)
+    bpy.ops.wm.ply_import(filepath=os.path.join(folder, src), **AXES)
+    new = [o for o in bpy.data.objects if o not in before]
+    if not new:
+        raise RuntimeError("Blender no importó la malla")
+    ob = new[0]
+    for c in list(ob.users_collection):
+        c.objects.unlink(ob)
+    coll.objects.link(ob)
+    ob.name = man.get("nombre", oid)
+    ob["rs_object_id"] = oid
+    setup_mesh(ob)
+    for o in context.view_layer.objects:
+        o.select_set(False)
+    ob.select_set(True)
+    context.view_layer.objects.active = ob
+    return ob, man
+
+
+def quick_clean(ob, merge_mm=0.5, close_base=True, max_triangles=100000):
+    """Limpieza mínima: unir vértices duplicados, quitar trozos sueltos, cerrar la base abierta
+    (el escáner no ve la cara apoyada en la mesa) y bajar triángulos si sobran."""
+    import bmesh
+    me = ob.data
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=merge_mm / 1000.0)
+    # trozos sueltos: quedarse con las islas que tengan al menos el 5 % de la mayor
+    islands, seen = [], set()
+    for f in bm.faces:
+        if f.index in seen:
+            continue
+        stack, isl = [f], []
+        seen.add(f.index)
+        while stack:
+            g = stack.pop()
+            isl.append(g)
+            for e in g.edges:
+                for h in e.link_faces:
+                    if h.index not in seen:
+                        seen.add(h.index)
+                        stack.append(h)
+        islands.append(isl)
+    if islands:
+        biggest = max(len(i) for i in islands)
+        drop = [f for isl in islands if len(isl) < 0.05 * biggest for f in isl]
+        if drop:
+            bmesh.ops.delete(bm, geom=drop, context='FACES')
+        loose = [v for v in bm.verts if not v.link_faces]
+        if loose:
+            bmesh.ops.delete(bm, geom=loose, context='VERTS')
+    filled = 0
+    if close_base:
+        boundary = [e for e in bm.edges if e.is_boundary]
+        if boundary:
+            res = bmesh.ops.holes_fill(bm, edges=boundary, sides=0)
+            caps = res.get("faces", [])
+            filled = len(caps)
+            if caps:  # tapas como triángulos: Unity y Open3D no leen polígonos de muchos lados
+                bmesh.ops.triangulate(bm, faces=caps, quad_method='BEAUTY', ngon_method='BEAUTY')
+    bm.to_mesh(me)
+    bm.free()
+    me.update()
+    tris = sum(len(p.vertices) - 2 for p in me.polygons)
+    if max_triangles and tris > max_triangles:
+        mod = ob.modifiers.new("RS_Decimar", 'DECIMATE')
+        mod.ratio = max_triangles / tris
+    return {"triangulos": tris, "huecos_cerrados": filled}
+
+
+def publish_object(ob, context):
+    """Exporta el objeto a la biblioteca como objeto_limpio.ply y lo marca publicado en Unity."""
+    oid = ob.get("rs_object_id")
+    if not oid:
+        raise ValueError("El objeto activo no viene de la biblioteca (falta rs_object_id). Ábrelo con «Abrir objeto».")
+    folder = os.path.join(library_dir(), oid)
+    path = os.path.join(folder, "objeto_limpio.ply")
+    for o in context.view_layer.objects:
+        o.select_set(False)
+    ob.select_set(True)
+    context.view_layer.objects.active = ob
+    tri = ob.modifiers.new("RS_Triangular", 'TRIANGULATE')   # solo triángulos en el archivo
+    try:
+        bpy.ops.wm.ply_export(filepath=path, export_selected_objects=True, apply_modifiers=True,
+                              export_colors='SRGB', export_normals=True, export_uv=False, ascii_format=False, **AXES)
+    finally:
+        ob.modifiers.remove(tri)
+    man_path = os.path.join(folder, "objeto.json")
+    man = _read_json(man_path) or {"id": oid}
+    import time as _time
+    man.update(estado="limpio", publicado=True, version=int(man.get("version", 1)) + 1,
+               actualizado=_time.time(), fuente="objeto_limpio.ply", nombre=ob.name)
+    tmp = man_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(man, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, man_path)
+    return man
+
+
+class REALSENSE_OT_open_object(bpy.types.Operator):
+    bl_idname = "realsense.open_object"
+    bl_label = "Abrir objeto"
+    bl_description = "Importa el objeto de la biblioteca (la versión limpia si existe) de pie sobre el suelo"
+    bl_options = {'REGISTER', 'UNDO'}
+    object_id: bpy.props.StringProperty(default="")
+
+    def execute(self, context):
+        oid = self.object_id or context.scene.realsense_props.library_object
+        if not oid:
+            self.report({'ERROR'}, "No hay objeto seleccionado")
+            return {'CANCELLED'}
+        try:
+            ob, man = open_library_object(oid, context)
+        except Exception as e:  # noqa: BLE001
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Abierto «{ob.name}» ({man.get('triangulos', 0):,} triángulos)")
+        return {'FINISHED'}
+
+
+class REALSENSE_OT_quick_clean(bpy.types.Operator):
+    bl_idname = "realsense.quick_clean"
+    bl_label = "Limpieza rápida"
+    bl_description = "Une vértices, quita trozos sueltos, cierra la base y limita los triángulos"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        ob = context.active_object
+        if not ob or ob.type != 'MESH':
+            self.report({'ERROR'}, "Selecciona la malla del objeto")
+            return {'CANCELLED'}
+        p = context.scene.realsense_props
+        if ob.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        r = quick_clean(ob, close_base=p.close_base, max_triangles=p.max_triangles)
+        self.report({'INFO'}, f"Limpio: {r['triangulos']:,} triángulos, {r['huecos_cerrados']} caras de cierre")
+        return {'FINISHED'}
+
+
+class REALSENSE_OT_publish_object(bpy.types.Operator):
+    bl_idname = "realsense.publish_object"
+    bl_label = "Publicar en Unity"
+    bl_description = "Guarda esta malla como versión limpia del objeto y la publica para VR ScanWorld"
+
+    def execute(self, context):
+        ob = context.active_object
+        if not ob or ob.type != 'MESH':
+            self.report({'ERROR'}, "Selecciona la malla del objeto")
+            return {'CANCELLED'}
+        try:
+            if ob.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            man = publish_object(ob, context)
+        except Exception as e:  # noqa: BLE001
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Publicado «{man['nombre']}» v{man['version']}: Unity lo recibirá en unos segundos")
+        return {'FINISHED'}
+
+
+class REALSENSE_PT_objects(bpy.types.Panel):
+    bl_label = "Objetos escaneados"
+    bl_idname = "REALSENSE_PT_objects"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'RealSense'
+
+    def draw(self, context):
+        layout = self.layout
+        p = context.scene.realsense_props
+        col = layout.column(align=True)
+        col.label(text="1 · Abrir", icon='IMPORT')
+        col.prop(p, "library_object", text="")
+        col.operator("realsense.open_object", icon='MESH_MONKEY')
+        col = layout.column(align=True)
+        col.label(text="2 · Ajustar (opcional)", icon='MODIFIER')
+        col.prop(p, "close_base")
+        col.prop(p, "max_triangles")
+        col.operator("realsense.quick_clean", icon='BRUSH_DATA')
+        col = layout.column(align=True)
+        col.label(text="3 · Enviar", icon='EXPORT')
+        ob = context.active_object
+        row = col.row()
+        row.scale_y = 1.4
+        row.enabled = bool(ob and ob.get("rs_object_id"))
+        row.operator("realsense.publish_object", icon='WORLD')
+        if ob and not ob.get("rs_object_id"):
+            col.label(text="Selecciona un objeto abierto desde la biblioteca", icon='INFO')
+
+
+RealSenseProperties.__annotations__.update({
+    "library_object": bpy.props.EnumProperty(name="Objeto", items=_object_items,
+                                             description="Objetos de Saves/objetos"),
+    "close_base": bpy.props.BoolProperty(name="Cerrar la base", default=True,
+                                         description="Tapa el hueco de la cara apoyada en la mesa"),
+    "max_triangles": bpy.props.IntProperty(name="Máx. triángulos", default=100000, min=1000, max=2000000,
+                                           description="Si hay más, se añade un modificador Decimate"),
+})
+
+
 classes = (
     RealSenseProperties,
     RealSensePreferences,
     REALSENSE_OT_latest,
     REALSENSE_OT_import_scan,
     REALSENSE_OT_generate_mesh,
+    REALSENSE_OT_open_object,
+    REALSENSE_OT_quick_clean,
+    REALSENSE_OT_publish_object,
     REALSENSE_PT_panel,
+    REALSENSE_PT_objects,
 )
 
 
