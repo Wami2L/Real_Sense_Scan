@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import pytest
 
-from live3d.alignment import D455, RGBDView, align_pair, pose_delta, public_result
+from live3d.alignment import D455, AlignOptions, RGBDView, align_pair, pose_delta, public_result
 from live3d.capture import SyntheticDualSource as S
 from live3d.registration import euler_translation_to_matrix
 
@@ -98,3 +98,57 @@ def test_salto_grande_respecto_a_calibracion_sin_evidencia_pide_confirmacion(pai
         assert pose_delta(prior, res["matrix_4x4"])["translation_cm"] <= 5.0
     else:
         assert "matrix_4x4" not in res
+
+
+def _gris(v, label):
+    return RGBDView(np.full_like(v.color, 128), v.depth, v.depth_intr, 0.001, v.color_intr,
+                    v.depth_to_color, v.timestamp, label)
+
+
+def test_consistencia_no_valida_poses_fuera_del_rango_del_sensor(pair):
+    """Un punto predicho a cientos de metros no puede contar como consistente (sigma acotada a z_max)."""
+    from live3d.alignment import _cloud, evaluate, plausible_pose
+    v1, v2 = pair
+    lejos = np.eye(4)
+    lejos[:3, 3] = (-24.0, -314.0, 1.3)
+    assert not plausible_pose(lejos, D455)
+    c1, c2 = (_cloud(v, D455, 0.01) for v in pair)
+    nubes = [(np.asarray(c.points), np.asarray(c.normals)) for c in (c1, c2)]
+    zd = [v.depth_m() for v in pair]
+    ev = evaluate(lejos, *nubes, v1, v2, *zd, D455, AlignOptions())
+    assert ev["overlap_points"] < 50
+
+
+def test_camaras_movidas_sin_fotogrametria_se_encuentran_y_piden_confirmacion(pair):
+    """Montaje cambiado de lado (calibración guardada en espejo) y sin texturas: la búsqueda de
+    montaje encuentra la pose, pero solo se aplica si el usuario confirma que movió las cámaras."""
+    v1, v2 = _gris(pair[0], "Cam 1"), _gris(pair[1], "Cam 2")
+    espejo = euler_translation_to_matrix(-60, 5, 25, 60, 5, -10)
+    res = align_pair(v1, v2, prior_T=espejo)
+    assert not res["success"] and "matrix_4x4" not in res
+    assert res["needs_confirmation"] and res["quality_if_confirmed"] in ("buena", "aceptable")
+    assert pose_delta(GT, res["candidate_matrix_4x4"])["translation_cm"] < 2.0
+    confirmado = align_pair(v1, v2, prior_T=None)  # el usuario confirma: la calibración vieja deja de contar
+    assert confirmado["success"], public_result(confirmado)
+    assert pose_delta(GT, confirmado["matrix_4x4"])["translation_cm"] < 2.0
+
+
+def test_semilla_extra_de_los_sliders(pair):
+    v1, v2 = _gris(pair[0], "Cam 1"), _gris(pair[1], "Cam 2")
+    cerca = euler_translation_to_matrix(S.CAM2_OFFSET * 100 + 4, 2, -3, 3, 0, 0)
+    res = align_pair(v1, v2, extra_seeds=[("pose de los sliders", cerca)], opt=AlignOptions(mount_search=False))
+    assert res["success"], public_result(res)
+    assert pose_delta(GT, res["matrix_4x4"])["translation_cm"] < 1.0
+
+
+def test_poca_zona_comun_no_da_falso_positivo_en_la_busqueda_a_ciegas(pair):
+    """Con muy poca superficie común (cámara tapada de cerca), probar muchas poses no debe
+    acabar aceptando una que encaje por azar (pasó en hardware: Ty -3 m y roll -171°)."""
+    v1, v2 = _gris(pair[0], "Cam 1"), _gris(pair[1], "Cam 2")
+    recorte = np.zeros_like(v2.depth)
+    h, w = recorte.shape
+    recorte[h // 2 - 20:h // 2 + 20, w // 2 - 30:w // 2 + 30] = v2.depth[h // 2 - 20:h // 2 + 20, w // 2 - 30:w // 2 + 30]
+    tapada = RGBDView(v2.color, recorte, v2.depth_intr, 0.001, v2.color_intr, v2.depth_to_color, v2.timestamp, "Cam 2")
+    res = align_pair(v1, tapada, opt=AlignOptions(min_valid_depth_frac=0.0))
+    assert not res["success"] and "matrix_4x4" not in res
+    assert not res.get("needs_confirmation")

@@ -285,7 +285,7 @@ btnTakeCapture.addEventListener("click", takeCapture);
 // ==========================================
 // 5. EJECUTAR ALINEACIÓN VIRTUAL Y REFLEJAR EN CÁMARAS Y 3D
 // ==========================================
-async function runAlignment() {
+async function runAlignment(opts = {}) {
   if (isAligning) return;
   isAligning = true;
   btnAlign.disabled = true;
@@ -296,6 +296,8 @@ async function runAlignment() {
 
   try {
     const payload = activeCaptureId ? { capture_id: activeCaptureId } : {};
+    if (manualDirty) payload.seed = currentSliderPose();   // ajuste a mano como punto de partida
+    if (opts.ignorePrior) payload.ignore_prior = true;
     const res = await fetch("/api/align", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -325,6 +327,17 @@ async function runAlignment() {
       // No fiable: no se aplica. Las vistas muestran la calibración VIGENTE para comparar.
       statusBanner.className = "status-banner warning";
       statusBanner.innerHTML = `⚠️ <strong>No se aplicó.</strong> ${escapeHtml(data.message)}${warnList}`;
+      if (data.needs_confirmation && data.quality_if_confirmed) {
+        // La geometría encaja bien pero contradice la calibración guardada: lo decide el usuario
+        const c = data.candidate_components || {};
+        const t = c.translation_cm || {}, r = c.rotation_deg || {};
+        const btn = document.createElement("button");
+        btn.className = "btn-confirm-moved";
+        btn.textContent = `Moví las cámaras: aplicar esta pose (${data.quality_if_confirmed})`;
+        btn.title = `Tx ${t.x} cm · Ty ${t.y} cm · Tz ${t.z} cm · Yaw ${r.yaw}° · Pitch ${r.pitch}° · Roll ${r.roll}°`;
+        btn.addEventListener("click", () => runAlignment({ ignorePrior: true }));
+        statusBanner.appendChild(btn);
+      }
       await refreshStatus();
       setVisorMode(data.overlay_url ? "overlay" : "matches");
     } else {
@@ -341,7 +354,7 @@ async function runAlignment() {
   }
 }
 
-btnAlign.addEventListener("click", runAlignment);
+btnAlign.addEventListener("click", () => runAlignment());
 
 // ==========================================
 // 6. RENDERIZAR GALERÍA DE CAPTURAS

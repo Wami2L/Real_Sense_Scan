@@ -242,6 +242,20 @@ Frente al modo sintético, cada cuadro real pesa ~2× (848×480 sin decimar, C2)
 - **N8 — Δt del snapshot dual falso (resuelto).** Con la Cam 2 fuera del dominio de tiempo global, el respaldo usaba `time.time()` tomado después de filtrar y copiar. En Python 3.12 sobre Windows ese reloj va a saltos de ~15,6 ms, así que `dt_ms` salía 0,0 / 15,6 aunque los cuadros estuvieran separados 30–60 ms. Ahora se usa `perf_counter()` justo después de `wait_for_frames`, y el resultado indica `dt_source` (`hardware (global_time)` / `llegada al host`), que también se guarda en `metadata_dual.json`. Medido después del arreglo: 15–41 ms.
 - La fuente dual real publica `profile` en el status (antes salía vacío en el visor y en el benchmark).
 
+### 6.3 ter Montaje cambiado de lado: búsqueda de montaje y confirmación (2026-10-19)
+
+- **N9 — La calibración guardada estaba estropeada.** `config/dual_camera_config.json` tenía Tx = -95 cm (con fecha y métricas de otra calibración). Lo más probable es que lo dejaran así los sliders antiguos, que guardaban en cada movimiento (N4). La buena del 16-10 era (-55, +4, +20) cm con yaw +63,5°.
+- **N10 — Las cámaras cambiaron de lado.** Con el montaje del 19-10, la Cam 2 está a la **derecha** de la Cam 1 (en el sujeto, los brazos van a la derecha de la imagen en la Cam 1 y a la izquierda en la Cam 2). Pose medida en tres pares en vivo: t ≈ (+44,4, +6,1, +41,6) cm, yaw -64,5° (±1,5°), pitch +7,4°, roll +1,7°, con consistencia del 87–89 % y RMSE de 4–10 mm. El motor no podía llegar ahí: SIFT da 0–1 inliers a ~65°, la semilla guardada estaba en el lado contrario y FPFH daba poses absurdas. Y aunque llegara, la habría rechazado por alejarse de la calibración vigente sin evidencia fotogramétrica, sin que el estudio ofreciera forma de confirmarlo.
+- **Cambios:**
+  - Búsqueda de montaje (`mount_search`): 125 poses genéricas (paralelas o convergentes, a ambos lados) cribadas con ICP grueso y consistencia proyectiva, con tope de 8 s. Solo se lanza si ninguna otra hipótesis es buena.
+  - Semillas extra: la pose de los sliders se envía al alinear si se movieron.
+  - El estudio muestra **«Moví las cámaras: aplicar esta pose»** cuando la geometría es buena pero contradice la calibración guardada (`needs_confirmation` + `quality_if_confirmed`). Al pulsarlo se vuelve a alinear sin la calibración vieja como referencia.
+  - Los sliders arrancan en 0, sin una pose de montaje cableada.
+- **N11 — Falso positivo detectado en hardware y corregido.** Con el sujeto tapando una cámara a menos de 0,5 m, la búsqueda aceptó como «buena» una pose con Ty = -3 m y roll -171°. Tenía dos causas:
+  - La σ del umbral se calculaba con la profundidad *predicha* sin acotar: a 300 m, σ ≈ 200 m y todo «encajaba». Ahora se acota a `z_max`.
+  - Comparaciones múltiples: entre 125 poses, alguna encaja por azar en poca superficie. Ahora las hipótesis a ciegas (FPFH y búsqueda) exigen ≥ 1500 puntos comunes (~0,15 m²) y se rechazan como **ambiguas** si otra pose distinta (> 5 cm / 5°) explica la escena con menos de 10 puntos de diferencia. También se descartan poses no rígidas o con |t| > 2·`z_max`.
+- **Montaje no rígido.** Entre dos grabaciones separadas 20 minutos, el fondo se desplazó 27 px en la Cam 1 (~3,6°) y 54 px en la Cam 2 (~7°). Cualquier calibración caduca en cuanto se toca una cámara: **fijar el montaje es requisito previo**.
+
 ### 6.4 Recomendaciones de operación (según el sensor)
 
 1. **Calibración inicial con ChArUco** (ya existe en 5002) y la alineación automática para verificar y refinar. Es lo único fiable para un montaje tan convergente.

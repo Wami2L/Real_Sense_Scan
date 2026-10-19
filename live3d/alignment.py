@@ -78,6 +78,11 @@ class AlignOptions:
     icp_scales: tuple = (0.04, 0.02, 0.01)
     min_threshold_m: float = 0.01    # suelo del umbral de consistencia (bordes, cuantización)
     min_overlap_points: int = 600    # puntos mutuamente visibles y consistentes (vóxel 1 cm)
+    # Hipótesis "a ciegas" (FPFH, búsqueda de montaje): al probar muchas poses, alguna encaja por
+    # azar en poca superficie. Exigen más zona común (~0.15 m²) y que ninguna pose distinta la
+    # explique casi igual de bien.
+    min_overlap_points_blind: int = 1500
+    ambiguity_margin: float = 0.10
     good_consistency: float = 0.85
     ok_consistency: float = 0.70
     min_overlap_frac: float = 0.03   # fracción mínima de ambas nubes que debe quedar en zona común
@@ -85,6 +90,11 @@ class AlignOptions:
     # exige evidencia fuerte (calidad buena + fotogrametría coherente) o confirmación manual.
     max_prior_shift_cm: float = 5.0
     max_prior_shift_deg: float = 5.0
+    # Búsqueda de montaje: si ninguna hipótesis es buena (cámaras movidas, calibración vieja o
+    # inexistente, SIFT débil por convergencia fuerte), se criba una rejilla de poses genéricas.
+    mount_search: bool = True
+    mount_search_top: int = 3
+    mount_search_budget_s: float = 8.0  # tope de tiempo (escenas sin estructura hacen el ICP lento)
 
 
 # --------------------------------------------------------------------------- #
@@ -386,7 +396,10 @@ def projective_consistency(T_src_to_tgt, pts_src, normals_src, view_tgt, zmap_tg
     zm = zmap_tgt[v, u].astype(np.float64)
     seen = zm > 0
     z, zm, P, N = z[seen], zm[seen], P[seen], N[seen]
-    thr = np.maximum(min_thr, 3.0 * np.sqrt(sensor.sigma_z(z) ** 2 + sensor.sigma_z(zm) ** 2))
+    # sigma acotada al rango del sensor: un punto predicho a decenas de metros no puede tener
+    # una tolerancia de metros (quedaría "consistente" con cualquier cosa); cuenta como oculto
+    zs = np.minimum(z, sensor.z_max_m)
+    thr = np.maximum(min_thr, 3.0 * np.sqrt(sensor.sigma_z(zs) ** 2 + sensor.sigma_z(zm) ** 2))
     d = z - zm
     facing = np.einsum("ij,ij->i", N, -P) / np.maximum(np.linalg.norm(P, axis=1), 1e-9) > -0.2
     close = np.abs(d) <= thr
@@ -416,6 +429,68 @@ def evaluate(T, cloud1, cloud2, view1, view2, zd1, zd2, sensor, opt, P1=None, P2
     return out
 
 
+def plausible_pose(T, sensor):
+    """Pose rígida y con las cámaras a una distancia compatible con ver una zona común
+    (dos cámaras a más de 2·z_max no pueden medir la misma superficie)."""
+    T = np.asarray(T, np.float64)
+    if T.shape != (4, 4) or not np.all(np.isfinite(T)):
+        return False
+    R = T[:3, :3]
+    if not np.allclose(R @ R.T, np.eye(3), atol=1e-3) or np.linalg.det(R) < 0.99:
+        return False
+    return float(np.linalg.norm(T[:3, 3])) <= 2.0 * sensor.z_max_m
+
+
+def mount_search_seeds():
+    """Poses genéricas de dos cámaras que miran a una zona común: lado a lado en paralelo o
+    convergentes (la cámara desplazada a un lado gira hacia el otro), a ambos lados. No es la
+    pose de ningún montaje concreto: cubre el espacio de montajes razonables para el ICP."""
+    from .registration import euler_translation_to_matrix
+    poses = [(0.0, 0.0, 0.0)]
+    # cada pose se prueba a ambos lados seguidos: si el tope de tiempo corta la criba, no queda un
+    # lado entero sin explorar
+    for tx, tz, yaw in [(tx, 0.0, 0.0) for tx in (15.0, 30.0)] +             [(tx, tz, yaw) for tx in (45.0, 25.0, 65.0, 90.0) for yaw in (60.0, 45.0, 75.0, 30.0, 90.0)
+             for tz in (25.0, 0.0, 50.0)]:
+        poses += [(tx, tz, -yaw), (-tx, tz, yaw)]
+    return [euler_translation_to_matrix(tx, 0.0, tz, yaw, 0.0, 0.0) for tx, tz, yaw in poses]
+
+
+def mount_search(pyr_src, pyr_tgt, view1, view2, zd1, zd2, sensor, opt):
+    """Criba la rejilla de mount_search_seeds() con ICP grueso y consistencia proyectiva sobre
+    nubes reducidas. Devuelve las mejores poses distintas (sin refinar), cuántas se cribaron y
+    cuántas había (menos si se agotó el tope de tiempo)."""
+    reg = o3d.pipelines.registration
+    coarse, mid = opt.icp_scales[0], opt.icp_scales[min(1, len(opt.icp_scales) - 1)]
+    src, tgt = pyr_src[coarse], pyr_tgt[coarse]
+    if len(src.points) < 50 or len(tgt.points) < 50:
+        return [], 0
+    q1 = (np.asarray(pyr_tgt[mid].points), np.asarray(pyr_tgt[mid].normals))
+    q2 = (np.asarray(pyr_src[mid].points), np.asarray(pyr_src[mid].normals))
+    est = reg.TransformationEstimationPointToPlane(reg.TukeyLoss(k=coarse * 1.5))
+    crit = reg.ICPConvergenceCriteria(max_iteration=25)
+    min_ov = max(1, opt.min_overlap_points // 4)  # la nube cribada tiene ~4x menos puntos
+    scored = []
+    seeds = mount_search_seeds()
+    t0, n = time.time(), 0
+    for T0 in seeds:
+        if time.time() - t0 > opt.mount_search_budget_s:
+            break
+        n += 1
+        T = np.asarray(reg.registration_icp(src, tgt, coarse * 3.0, T0, est, crit).transformation)
+        if not plausible_pose(T, sensor):
+            continue
+        ev = evaluate(T, q1, q2, view1, view2, zd1, zd2, sensor, opt)
+        scored.append((ev["consistency"] * min(1.0, ev["overlap_points"] / min_ov), T))
+    scored.sort(key=lambda x: -x[0])
+    best = []
+    for _, T in scored:
+        if all(pose_delta(T, B)["translation_cm"] > 3.0 or pose_delta(T, B)["rotation_deg"] > 3.0 for B in best):
+            best.append(T)
+        if len(best) >= opt.mount_search_top:
+            break
+    return best, n, len(seeds)
+
+
 # --------------------------------------------------------------------------- #
 # Motor
 # --------------------------------------------------------------------------- #
@@ -429,8 +504,12 @@ def _depth_coverage(view, sensor):
     return float(((dm >= sensor.z_min_m) & (dm <= sensor.z_max_m)).mean())
 
 
-def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed=0):
+def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed=0, extra_seeds=()):
     """Calcula T(2->1) en el marco de PROFUNDIDAD de cada cámara.
+
+    prior_T: calibración vigente (semilla y referencia de estabilidad del montaje).
+    extra_seeds: [(nombre, T)] hipótesis adicionales, p. ej. la pose de los sliders. No cuentan
+    como calibración vigente: solo dan un punto de partida al ICP.
 
     Devuelve un dict con success, quality ('buena' | 'aceptable' | 'insuficiente'), message,
     matrix_4x4, metrics, candidates, warnings, delta_vs_prior y total_time_ms. Con
@@ -499,20 +578,42 @@ def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed
         seeds.append(("SIFT 3D + RANSAC", T_feat))
     if prior_T is not None:
         seeds.append(("calibración vigente", np.asarray(prior_T, np.float64)))
+    seeds += [(name, np.asarray(T, np.float64)) for name, T in extra_seeds]
+    blind_seeds = []
     try:
-        seeds.append(("FPFH global (geometría)", global_fpfh(pcd2, pcd1, 0.02)))
+        blind_seeds.append(("FPFH global (geometría)", global_fpfh(pcd2, pcd1, 0.02)))
     except RuntimeError as e:
         warnings.append(f"Registro global FPFH falló: {e}")
 
     candidates = []
-    for name, T0 in seeds:
+
+    def add_candidate(name, T0, blind=False):
         T = refine_icp(pyr2, pyr1, T0, opt.icp_scales)
+        if not plausible_pose(T, sensor):
+            return
         ev = evaluate(T, cloud1, cloud2, view1, view2, zd1, zd2, sensor, opt, P1[inliers] if n_inl else None,
                       P2[inliers] if n_inl else None, thr[inliers] if n_inl else None)
-        candidates.append({"name": name, "T": T, **ev})
+        candidates.append({"name": name, "T": T, "blind": blind, **ev})
 
-    viable = [c for c in candidates if c["overlap_points"] >= opt.min_overlap_points
-              and c["overlap_frac"] >= opt.min_overlap_frac]
+    def is_viable(c):
+        min_pts = opt.min_overlap_points_blind if c["blind"] else opt.min_overlap_points
+        return c["overlap_points"] >= min_pts and c["overlap_frac"] >= opt.min_overlap_frac
+
+    for name, T0 in seeds:
+        add_candidate(name, T0)
+    for name, T0 in blind_seeds:
+        add_candidate(name, T0, blind=True)
+    if opt.mount_search and not any(is_viable(c) and c["consistency"] >= opt.good_consistency for c in candidates):
+        t_ms = time.time()
+        found, n_done, n_seeds = mount_search(pyr2, pyr1, view1, view2, zd1, zd2, sensor, opt)
+        for i, T0 in enumerate(found):
+            add_candidate(f"búsqueda de montaje #{i + 1}", T0, blind=True)
+        finfo["mount_search"] = {"seeds": n_done, "of": n_seeds, "time_ms": round((time.time() - t_ms) * 1000, 1)}
+        if n_done < n_seeds:
+            warnings.append(f"Búsqueda de montaje cortada por tiempo ({n_done} de {n_seeds} hipótesis): la escena "
+                            "tiene poca estructura o mucho ruido de profundidad.")
+
+    viable = [c for c in candidates if is_viable(c)]
     summary = [{"name": c["name"], "consistency_pct": round(c["consistency"] * 100, 1),
                 "overlap_points": c["overlap_points"], "hidden_points": c["hidden_points"],
                 "overlap_frac_pct": round(c["overlap_frac"] * 100, 1), "rmse_mm": round(c["rmse_mm"], 2) if c["rmse_mm"] == c["rmse_mm"] else None,
@@ -522,7 +623,7 @@ def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed
     if not viable:
         return _fail("Solape insuficiente entre cámaras: ninguna hipótesis deja zona común suficiente. "
                      "Coloca el sujeto u objetos donde lo vean AMBAS cámaras, entre "
-                     f"{sensor.z_min_m:.2f} y {sensor.z_max_m:.1f} m.",
+                     f"{sensor.z_min_m:.2f} y {sensor.z_max_m:.1f} m, sin taparlas de cerca.",
                      warnings, t0, candidates=summary, metrics=base_metrics)
 
     # 5. Selección: consistencia; con fotogrametría fuerte, que también la respete --
@@ -548,18 +649,28 @@ def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed
                         "Revisa el solape visualmente.")
         if quality == "buena":
             quality = "aceptable"
+    if best["blind"] and quality != "insuficiente":
+        rivals = [c for c in candidates if c is not best
+                  and c["overlap_points"] >= 0.5 * best["overlap_points"]
+                  and c["consistency"] >= best["consistency"] - opt.ambiguity_margin
+                  and (pose_delta(c["T"], best["T"])["translation_cm"] > opt.max_prior_shift_cm
+                       or pose_delta(c["T"], best["T"])["rotation_deg"] > opt.max_prior_shift_deg)]
+        if rivals:
+            quality = "insuficiente"
+            warnings.append(f"Ambigua: {len(rivals)} pose(s) muy distinta(s) explican la escena casi igual de bien. "
+                            "Añade volumen y textura en la zona común (no solo una pared o una persona de cerca).")
 
     T = best["T"]
-    needs_confirmation = False
+    needs_confirmation, quality_if_confirmed = False, None
     delta = pose_delta(prior_T, T) if prior_T is not None else None
     if delta and (delta["translation_cm"] > opt.max_prior_shift_cm or delta["rotation_deg"] > opt.max_prior_shift_deg):
         strong = quality == "buena" and feature_strong and (best["feature_agreement"] or 0) >= 0.6
         if not strong and quality != "insuficiente":
-            needs_confirmation = True
+            needs_confirmation, quality_if_confirmed = True, quality
             quality = "insuficiente"
             warnings.append(f"La mejor hipótesis se aleja {delta['translation_cm']} cm / {delta['rotation_deg']}° de la "
-                            "calibración vigente sin evidencia suficiente. Si moviste las cámaras, recalibra con el "
-                            "tablero ChArUco o confirma la pose a mano en el modo Solape.")
+                            "calibración vigente sin evidencia fotogramétrica suficiente. Si moviste las cámaras, "
+                            "confírmalo (estudio: «Moví las cámaras») o recalibra con el tablero ChArUco.")
     metrics = {
         **base_metrics,
         "consistency_pct": round(cons * 100, 1),
@@ -580,6 +691,7 @@ def align_pair(view1, view2, prior_T=None, sensor=D455, opt=AlignOptions(), seed
         "warnings": warnings,
         "delta_vs_prior": delta,
         "needs_confirmation": needs_confirmation,
+        "quality_if_confirmed": quality_if_confirmed,  # calidad geométrica si el montaje se movió de verdad
         "total_time_ms": round((time.time() - t0) * 1000, 1),
         "_debug": {"kp1": kp1, "kp2": kp2, "matches": matches, "inliers": inliers},
     }

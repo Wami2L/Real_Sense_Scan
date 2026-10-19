@@ -971,3 +971,19 @@ html, body {
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.status-banner .btn-confirm-moved {
+  display: block;
+  margin-top: 10px;
+  padding: 8px 14px;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #fde68a;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.status-banner .btn-confirm-moved:hover {
+  background: rgba(245, 158, 11, 0.3);
+}

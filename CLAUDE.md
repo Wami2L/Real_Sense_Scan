@@ -17,8 +17,9 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
 - La Cam 2 no entrega metadatos de cuadro en Windows (registro UVC sin instalar) → timestamps `system_time`, no
   `global_time`; el Δt del snapshot dual se mide entonces por llegada al host (`dt_source` en el resultado).
 - Rango útil del D455 para calibrar: 0.52–3.0 m; ruido σz ≈ z²·0.1/(447·0.095) m (crece con z²).
-- Montaje actual muy convergente (~60–70° de yaw): SIFT entre vistas casi no funciona → la calibración inicial
-  se hace con ChArUco; la alineación automática verifica y refina.
+- Montaje muy convergente (~60–70° de yaw) y **no rígido**: cambia a menudo (el 16-10 Cam 2 estaba a la izquierda,
+  el 19-10 a la derecha, t ≈ (+44, +6, +42) cm, yaw ≈ -64°). SIFT entre vistas casi no funciona: la alineación se
+  apoya en la geometría (búsqueda de montaje + ICP) o en ChArUco. Nunca cablear una pose de montaje en el código.
 - Sin cámaras: `python app.py --synthetic [--dual]` (escena trazada con numpy). En dual, Cam 2 está desplazada
   +0.25 m en x sin rotación: es la verdad de referencia de los tests de alineación.
 - Si 5002 arranca en simulación por falta de cámaras, cambia solo a las reales al conectarlas (`device_watch_task`).

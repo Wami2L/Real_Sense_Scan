@@ -430,7 +430,11 @@ def _find_capture(cid):
 
 
 async def api_align(request):
-    """Alinea la toma activa con el motor único. Aplica en 5002 solo si el resultado es fiable."""
+    """Alinea la toma activa con el motor único. Aplica en 5002 solo si el resultado es fiable.
+
+    Body opcional: capture_id; seed {tx, ty, tz, yaw, pitch, roll} (pose de los sliders como
+    hipótesis adicional); ignore_prior=true cuando el usuario confirma que movió las cámaras
+    (la calibración vigente deja de ser referencia del montaje)."""
     global latest_alignment_result, active_capture_id
     data = {}
     if request.can_read_body:
@@ -450,8 +454,16 @@ async def api_align(request):
     prior, calib = await current_calibration()
     if prior is not None and not (calib or {}).get("is_calibrated"):
         prior = None
+    if data.get("ignore_prior"):
+        prior = None
+    extra = []
+    if data.get("seed"):
+        try:
+            extra.append(("pose de los sliders", _pose_from_body(data["seed"])))
+        except (ValueError, TypeError):
+            pass
     loop = asyncio.get_running_loop()
-    res = await loop.run_in_executor(None, align_pair, v1, v2, prior)
+    res = await loop.run_in_executor(None, lambda: align_pair(v1, v2, prior, extra_seeds=extra))
 
     cid, now_ts = rec["id"], int(time.time() * 1000)
     urls = {}
@@ -482,7 +494,8 @@ async def api_align(request):
         out["status"] = "warning"
         return web.json_response(out)
 
-    calibration = {"method": res["method"], "quality": res["quality"], "source": "estudio",
+    calibration = {"method": res["method"] + (" (montaje confirmado como movido)" if data.get("ignore_prior") else ""),
+                   "quality": res["quality"], "source": "estudio",
                    "consistency_pct": metrics.get("consistency_pct"), "rmse_mm": metrics.get("rmse_mm"),
                    "overlap_points": metrics.get("overlap_points"), "dt_ms": metrics.get("dt_ms"),
                    "feature_inliers": metrics.get("inliers"), "simulated": rec.get("simulated", False)}
