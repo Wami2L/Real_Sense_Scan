@@ -27,6 +27,7 @@ from ..alignment import D455
 from . import segment
 from .base import LAYOUTS, estimate_pose
 from .library import Library
+from .optica import rectify_snapshot
 
 reg = o3d.pipelines.registration
 
@@ -56,6 +57,9 @@ class ObjView:
         self.cols = None
         self.quality = {}
         self.thumb = None
+        self.excluded = False       # fuera de la malla (p. ej. Cam 2 sin calibración creíble)
+        self.T21 = None             # Cam 2: extrínseca usada como punto de partida
+        self.sibling = None         # Cam 2: la vista de la Cam 1 de la misma toma
 
     @property
     def label(self):
@@ -149,6 +153,8 @@ class ObjectScanSession:
         self.progress, self.stage = 0.0, ""
         self.result, self.error = None, None
         self.voxel = 0.003
+        self.cam2_corr = np.eye(4)    # corrección común de la calibración dual (marco de la Cam 2)
+        self.calib_info = None
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
@@ -167,7 +173,7 @@ class ObjectScanSession:
                 parts.append(("cam2", snap["cam2"]))
             new = []
             for cam, s in parts:
-                v = ObjView(len(self.views) + len(new), shot, cam, s)
+                v = ObjView(len(self.views) + len(new), shot, cam, rectify_snapshot(s))
                 self._pose_and_segment(v, new, snap.get("extrinsics"))
                 new.append(v)
             if not any(v.T is not None and v.pts_cam is not None and len(v.pts_cam) >= 400 for v in new):
@@ -211,7 +217,8 @@ class ObjectScanSession:
         if v.T is None and v.cam == "cam2" and T_2to1 is not None:
             sib = next((w for w in siblings if w.cam == "cam1" and w.T is not None), None)
             if sib is not None:
-                v.T, v.source = sib.T @ np.asarray(T_2to1, np.float64), "calibración"
+                v.T21, v.sibling = np.asarray(T_2to1, np.float64), sib
+                v.T, v.source = sib.T @ v.T21 @ self.cam2_corr, "calibración"
         # 3) primera vista sin base: marco provisional
         has_model = any(w.T is not None for w in self.views + siblings)
         if v.T is None and not has_model:
@@ -353,12 +360,20 @@ class ObjectScanSession:
         s = float(np.median(self._scales))
         self.scale = s if abs(s - 1) > 0.015 else 1.0
 
-    def _refine(self, v, siblings=()):
-        """Ajuste fino de la pose de la vista contra las demás (solo el objeto)."""
-        others = [w for w in self.views + list(siblings) if w is not v and w.T is not None and w.pts_cam is not None]
+    def _refine(self, v, siblings=(), final=False):
+        """Ajuste fino de la pose de la vista contra las demás (solo el objeto).
+
+        Contra qué se ajusta: una vista por marcadores, contra las otras por marcadores (exactas);
+        el resto, contra las que NO dependen de la calibración dual (para que una calibración
+        mala no se refuerce a sí misma)."""
+        pool = [w for w in self.views + list(siblings) if w is not v and w.T is not None and w.pts_cam is not None]
+        if v.source == "base":
+            others = [w for w in pool if w.source == "base"] or pool
+        else:
+            others = [w for w in pool if w.source != "calibración"] or pool
         if not others:
             v.quality.update(fitness=None, rmse_mm=None, correccion_mm=0.0, correccion_deg=0.0)
-            return
+            return False
         model = o3d.geometry.PointCloud()
         for w in others:
             model += w.object_cloud_base(self.voxel)
@@ -366,13 +381,18 @@ class ObjectScanSession:
         src = v.object_cloud_cam(self.voxel)
         T0 = v.T
         _, fit0, rmse0 = icp_object(src, model, T0, self.voxel, scales=())
-        # una pose por marcadores ya es buena: solo retoques finos; las demás pueden moverse más
-        scales = (2, 1) if v.source == "base" else (4, 2, 1)
+        # pose por marcadores: retoques finos; la de calibración puede estar a varios cm
+        if v.source == "base" or final:
+            scales = (2, 1)
+            limits = (8.0, 2.0) if v.source == "base" else (12.0, 2.5)
+        elif v.source == "calibración":
+            scales, limits = (8, 4, 2, 1), (150.0, 25.0)
+        else:
+            scales, limits = (4, 2, 1), (1e9, 360.0)
         T, fit, rmse = icp_object(src, model, T0, self.voxel, scales=scales)
         dT = np.linalg.inv(T0) @ T
         dmm, ddeg = float(np.linalg.norm(dT[:3, 3]) * 1000), _rot_deg(dT)
-        limits = {"base": (8.0, 2.0), "calibración": (150.0, 25.0)}.get(v.source, (1e9, 360.0))
-        improves = fit >= fit0 - 0.01 and rmse <= rmse0 * 0.97
+        improves = (fit >= fit0 - 0.01 and rmse <= rmse0 * 0.97) or (fit0 < 0.2 and fit >= 0.35)
         accepted = fit >= 0.25 and dmm <= limits[0] and ddeg <= limits[1] and improves
         if accepted:
             v.T = T
@@ -381,6 +401,97 @@ class ObjectScanSession:
         v.quality.update(fitness=round(fit, 3), rmse_mm=round(rmse * 1000, 2),
                          correccion_mm=round(dmm if accepted else 0.0, 1),
                          correccion_deg=round(ddeg if accepted else 0.0, 2), refinada=accepted)
+        if accepted and v.source == "calibración" and not final:
+            self._update_cam2_corr(extra=[v])
+        return accepted
+
+    # ---- corrección común de la calibración dual ----
+    def _cam2_samples(self, extra=()):
+        out = []
+        for v in list(self.views) + [e for e in extra if e not in self.views]:
+            if v.source == "calibración" and v.T21 is not None and v.sibling is not None and v.quality.get("refinada"):
+                out.append(np.linalg.inv(v.sibling.T @ v.T21) @ v.T)
+        return out
+
+    @staticmethod
+    def _robust_mean(Ts):
+        """Media robusta de transformaciones: mediana de traslación y media de rotaciones,
+        descartando las que se alejan más de 2 cm / 3 grados de la mediana."""
+        from scipy.spatial.transform import Rotation
+        Ts = [np.asarray(T) for T in Ts]
+        t = np.median([T[:3, 3] for T in Ts], axis=0)
+        R = Rotation.from_matrix([T[:3, :3] for T in Ts])
+        Rm = R.mean()
+        keep = [k for k, T in enumerate(Ts)
+                if np.linalg.norm(T[:3, 3] - t) < 0.02 and (Rm.inv() * R[k]).magnitude() < np.radians(3)]
+        if keep:
+            t = np.mean([Ts[k][:3, 3] for k in keep], axis=0)
+            Rm = R[keep].mean()
+        C = np.eye(4)
+        C[:3, :3], C[:3, 3] = Rm.as_matrix(), t
+        return C
+
+    def _update_cam2_corr(self, extra=()):
+        samples = self._cam2_samples(extra)
+        if samples:
+            self.cam2_corr = self._robust_mean(samples)
+
+    MAX_CALIB_FIX = (0.15, 30.0)   # una corrección de calibración mayor que esto no es creíble (m, grados)
+
+    def _joint_cam2_correction(self):
+        """Una sola corrección de la calibración para TODAS las tomas.
+
+        Cada vista de la Cam 2 se alinea (ICP desde la calibración y, si hace falta, desde un
+        registro global FPFH) contra el modelo de las vistas que no dependen de la calibración.
+        Solo se aplica si varias tomas coinciden; si no, las vistas de la Cam 2 que no encajan
+        se dejan fuera de la malla (mejor menos datos que un objeto con fantasma)."""
+        cam2 = [v for v in self.views if v.source == "calibración" and v.T21 is not None and v.sibling is not None]
+        if not cam2:
+            return None
+        ref = [w for w in self.views if w.source != "calibración" and w.pts_cam is not None]
+        model = o3d.geometry.PointCloud()
+        for w in ref:
+            model += w.object_cloud_base(self.voxel)
+        model = model.voxel_down_sample(self.voxel)
+        samples = []
+        for v in cam2:
+            T_cal = v.sibling.T @ v.T21 @ self.cam2_corr
+            v.T = T_cal
+            self._segment(v)
+            src = v.object_cloud_cam(self.voxel)
+            cands = [icp_object(src, model, T_cal, self.voxel, scales=(8, 4, 2, 1))]
+            if cands[0][1] < 0.6:
+                try:
+                    cands.append(icp_object(src, model, fpfh_global(src, model, self.voxel), self.voxel, scales=(4, 2, 1)))
+                except RuntimeError:
+                    pass
+            for T, fit, _ in sorted(cands, key=lambda c: -c[1]):
+                C = np.linalg.inv(v.sibling.T @ v.T21) @ T
+                if fit >= 0.35 and np.linalg.norm(C[:3, 3]) <= self.MAX_CALIB_FIX[0] and _rot_deg(C) <= self.MAX_CALIB_FIX[1]:
+                    samples.append(C)
+                    break
+        info = {"tomas": len(cam2), "muestras": len(samples), "aplicada": False}
+        need = max(2, int(np.ceil(0.25 * len(cam2))))
+        if len(samples) >= need:
+            C = self._robust_mean(samples)
+            agree = sum(1 for S in samples if np.linalg.norm(S[:3, 3] - C[:3, 3]) < 0.02
+                        and _rot_deg(np.linalg.inv(C) @ S) < 3.0)
+            if agree >= need:
+                self.cam2_corr = C
+                info.update(aplicada=True, coinciden=agree)
+        for v in cam2:
+            v.T = v.sibling.T @ v.T21 @ self.cam2_corr
+            self._segment(v)
+            if not info["aplicada"]:
+                # sin consenso: fuera las vistas de la Cam 2 que no encajan con la calibración vigente
+                _, fit0, _ = icp_object(v.object_cloud_cam(self.voxel), model, v.T, self.voxel, scales=())
+                if fit0 < 0.35:
+                    v.quality["motivo"] = "Cam 2 descartada: no encaja con la calibración dual (recalíbrala)"
+                    v.excluded = True
+        C = self.cam2_corr
+        info.update(mm=round(float(np.linalg.norm(C[:3, 3]) * 1000), 1), deg=round(_rot_deg(C), 2),
+                    T_2a1_corregida=(cam2[0].T21 @ C).tolist())
+        return info
 
     def _hint(self, new):
         v = new[0]
@@ -441,12 +552,19 @@ class ObjectScanSession:
     def _process(self, target_triangles):
         t0 = time.time()
         try:
-            # a) refinamiento global: cada vista contra todas las demás (2 pasadas)
+            # a) poses: primero las independientes de la calibración (marcadores o geometría),
+            #    luego una corrección común para la Cam 2 y al final retoques finos de todas
             n = len(self.views)
-            for it in range(2):
-                for k, v in enumerate(self.views):
-                    self._stage(f"Ajustando poses (pasada {it + 1}/2, vista {k + 1}/{n})", 0.02 + 0.33 * (it * n + k) / (2 * n))
-                    self._refine(v)
+            indep = [v for v in self.views if v.source != "calibración"]
+            for k, v in enumerate(indep):
+                self._stage(f"Ajustando poses ({k + 1}/{len(indep)})", 0.02 + 0.15 * k / max(1, len(indep)))
+                self._refine(v)
+            self._stage("Corrigiendo la calibración de la Cam 2", 0.18)
+            self.calib_info = self._joint_cam2_correction()
+            for k, v in enumerate(self.views):
+                self._stage(f"Retoque final ({k + 1}/{n})", 0.22 + 0.13 * k / n)
+                if not v.excluded:
+                    self._refine(v, final=True)
             for v in self.views:
                 self._segment(v)
 
@@ -470,6 +588,7 @@ class ObjectScanSession:
                 "encaje_medio": round(float(np.mean(fits)), 3) if fits else None,
                 "escala_hoja": round(self.scale, 4),
                 "voxel_mm": round(self.voxel * 1000, 2),
+                "correccion_calibracion_dual": self.calib_info,
                 "pivote_desplazado_m": [round(float(x), 4) for x in offset],
                 "tiempo_proceso_s": round(time.time() - t0, 1),
             }
@@ -488,7 +607,8 @@ class ObjectScanSession:
             self.stage, self.progress, self.state = "", 0.0, "capturing"
 
     def _integrate(self):
-        P = np.vstack([segment.transform(v.T, v.pts_cam) for v in self.views])
+        used = [v for v in self.views if not v.excluded]
+        P = np.vstack([segment.transform(v.T, v.pts_cam) for v in used])
         lo, hi = np.percentile(P, 0.5, axis=0) - 0.02, np.percentile(P, 99.5, axis=0) + 0.02
         lo[1] = min(lo[1], -0.005)
         length = float(np.max(hi - lo))
@@ -499,8 +619,8 @@ class ObjectScanSession:
             length=length, resolution=res, sdf_trunc=voxel * 4,
             color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8, origin=lo.reshape(3, 1))
         pts = o3d.geometry.PointCloud()
-        for k, v in enumerate(self.views):
-            self._stage(f"Integrando vista {k + 1}/{len(self.views)}", 0.4 + 0.3 * k / len(self.views))
+        for k, v in enumerate(used):
+            self._stage(f"Integrando vista {k + 1}/{len(used)}", 0.4 + 0.3 * k / len(used))
             s = v.snap
             m = cv2.dilate(v.mask.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
             depth = np.where(m, s["depth"], 0).astype(np.uint16)

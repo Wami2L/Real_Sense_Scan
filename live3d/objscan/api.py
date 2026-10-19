@@ -95,15 +95,17 @@ def setup_objscan_routes(app, library=None):
         try:
             snap = await loop.run_in_executor(None, src.get_snapshot, 5.0)
         except Exception as e:  # noqa: BLE001
-            return web.json_response({"error": f"No se pudo leer la cámara: {e}"}, status=503)
+            st = src.status() if hasattr(src, "status") else {}
+            why = st.get("message") if st.get("state") not in (None, "streaming") else str(e)
+            return web.json_response({"error": f"No se pudo leer la cámara: {why}"}, status=503)
         cam1 = _snap_cam1(snap)
 
         def work():
             info = analyze(cam1, layout, vol, use_base=use_base, scale=s.scale if s else 1.0)
-            img = preview_image(cam1, info["mask"], info)
+            img = preview_image(info["snap"], info["mask"], info)
             return info, img
         info, img = await loop.run_in_executor(None, work)
-        out = {k: v for k, v in info.items() if k not in ("mask", "T_cam_to_base")}
+        out = {k: v for k, v in info.items() if k not in ("mask", "T_cam_to_base", "snap")}
         out["imagen"] = _jpeg_data_url(img)
         out["dual"] = snap.get("cam2") is not None
         out["simulada"] = bool(getattr(src, "simulated", False))
@@ -160,6 +162,22 @@ def setup_objscan_routes(app, library=None):
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response(s.summary())
 
+    async def aplicar_calibracion(_r):
+        """Aplica a la calibración dual la corrección que midió el escaneo (Cam 2 vs marcadores)."""
+        s, src = _session(), app.get("source")
+        info = ((s.result or {}).get("correccion_calibracion_dual") or {}) if s else {}
+        if not info.get("aplicada"):
+            return web.json_response({"error": "Este escaneo no midió una corrección fiable de la calibración"}, status=400)
+        if not hasattr(src, "set_extrinsics"):
+            return web.json_response({"error": "La fuente actual no es dual"}, status=400)
+        try:
+            src.set_extrinsics(info["T_2a1_corregida"], method="corrección por escaneo de objeto (marcadores + ICP)",
+                               source="objetos", correccion_mm=info["mm"], correccion_deg=info["deg"],
+                               muestras=info["muestras"], objeto=s.result.get("id"))
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        return web.json_response({"ok": True, "mm": info["mm"], "deg": info["deg"]})
+
     async def abrir_blender(r):
         oid = r.match_info["oid"]
         if not lib.exists(oid):
@@ -199,3 +217,4 @@ def setup_objscan_routes(app, library=None):
     app.router.add_post("/api/objscan/descartar", descartar)
     app.router.add_post("/api/objscan/procesar", procesar)
     app.router.add_post("/api/objetos/{oid}/blender", abrir_blender)
+    app.router.add_post("/api/objscan/aplicar_calibracion", aplicar_calibracion)

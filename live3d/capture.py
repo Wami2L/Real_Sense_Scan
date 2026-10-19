@@ -502,7 +502,8 @@ class RealSenseSource(BaseSource):
                             c_ci = ccolor.profile.as_video_stream_profile().get_intrinsics()
                             c_intr = {
                                 "width": c_ci.width, "height": c_ci.height,
-                                "fx": c_ci.fx, "fy": c_ci.fy, "ppx": c_ci.ppx, "ppy": c_ci.ppy
+                                "fx": c_ci.fx, "fy": c_ci.fy, "ppx": c_ci.ppx, "ppy": c_ci.ppy,
+                                "model": str(c_ci.model), "coeffs": [float(x) for x in c_ci.coeffs]
                             }
                             f_cdepth = cap_temporal.process(cap_spatial.process(cdepth)).as_depth_frame()
                             heat_f = cap_colorizer.colorize(f_cdepth).as_video_frame()
@@ -1224,7 +1225,8 @@ class DualRealSenseSource(_DualMixin, BaseSource):
                     continue
                 c_ci = color_f.profile.as_video_stream_profile().get_intrinsics()
                 c_intr = {"width": c_ci.width, "height": c_ci.height,
-                          "fx": c_ci.fx, "fy": c_ci.fy, "ppx": c_ci.ppx, "ppy": c_ci.ppy}
+                          "fx": c_ci.fx, "fy": c_ci.fy, "ppx": c_ci.ppx, "ppy": c_ci.ppy,
+                          "model": str(c_ci.model), "coeffs": [float(x) for x in c_ci.coeffs]}
 
                 if wants_snap:
                     self._store_snapshot(cam_idx, serial, frames, arrival, depth_f, color_f, c_intr, depth_scale,

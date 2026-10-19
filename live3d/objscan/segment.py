@@ -157,10 +157,13 @@ def object_extent(Pb):
 
 
 def analyze(snap, layout, vol, use_base=True, scale=1.0, sensor=D455):
-    """Diagnóstico del encuadre de UNA vista: base, objeto, tamaño, distancia y avisos."""
+    """Diagnóstico del encuadre de UNA vista: base, objeto, tamaño, distancia y avisos.
+    Rectifica la lente primero; devuelve el snapshot rectificado en out["snap"]."""
+    from .optica import rectify_snapshot
+    snap = rectify_snapshot(snap)
     bgr = cv2.cvtColor(snap["color"], cv2.COLOR_RGB2BGR)
     zmap = snap["depth"].astype(np.float64) * snap["depth_scale"]
-    out = {"base": None, "warnings": [], "ok": False}
+    out = {"base": None, "warnings": [], "ok": False, "snap": snap}
     T = None
     if use_base:
         bp = estimate_pose(bgr, snap["intrinsics"], layout, zmap=zmap, scale=scale)

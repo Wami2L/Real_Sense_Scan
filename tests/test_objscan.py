@@ -150,3 +150,23 @@ def test_biblioteca_publicar_y_regenerar_rsm(scene, tmp_path):
     assert read_rsm(lib.path(man["id"], "modelo.rsm"))["vertices"].shape[0] == len(clean.vertices)
     with pytest.raises(ValueError):
         lib.path("../fuera")
+
+
+def test_dual_con_calibracion_desajustada_se_corrige_sin_fantasmas(tmp_path):
+    """La Cam 2 no ve la base y su calibración está mal (4 cm, 5°): el escaneo estima UNA
+    corrección común con todas las tomas y la superficie sale igual de fiel."""
+    from live3d.registration import euler_translation_to_matrix
+    sc1, sc2 = ObjectScene(), ObjectScene()
+    sc2.sheet[:] = 1.0
+    lib = Library(str(tmp_path / "lib"))
+    s = ObjectScanSession("dual", base_dir=str(tmp_path), library=lib, log=lambda *a: None)
+    P = euler_translation_to_matrix(4, -2, 2, 5, -2.5, 1.7)
+    T1, T2 = orbit_pose(10, elevation_deg=28), orbit_pose(75, elevation_deg=40, distance=0.65)
+    for k in range(8):
+        s.add_snapshot({"cam1": sc1.render(T1, k * 45), "cam2": sc2.render(T2, k * 45),
+                        "extrinsics": np.linalg.inv(T1) @ T2 @ P})
+    s.finish(background=False)
+    info = s.result["correccion_calibracion_dual"]
+    assert info["aplicada"] and info["muestras"] >= 4
+    assert 30 < info["mm"] < 70 and 3 < info["deg"] < 9          # mide el desajuste inyectado
+    assert _surface_error_mm(lib, s.result) < 2.0

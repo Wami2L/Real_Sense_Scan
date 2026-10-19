@@ -217,7 +217,9 @@ async function showResult(man) {
     ['Poses por base', `${poses.base ?? 0} de ${man.vistas ?? '-'}`],
     ['Encaje medio', man.encaje_medio != null ? `${Math.round(man.encaje_medio * 100)} %` : '-'],
     ['Proceso', `${man.tiempo_proceso_s ?? '-'} s`],
-  ].map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('');
+  ].concat(calibRow(man)).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('');
+  const cal = man.correccion_calibracion_dual;
+  $('btn-calib').classList.toggle('hidden', !(cal?.aplicada && (cal.mm > 5 || cal.deg > 0.5)) || !session?.result || session.result.id !== man.id);
   $('btn-publicar').textContent = man.publicado ? 'Retirar de Unity' : 'Publicar en Unity';
   $('btn-publicar').dataset.id = man.id;
   $('btn-publicar').dataset.pub = man.publicado ? '1' : '';
@@ -229,6 +231,22 @@ async function showResult(man) {
     viewer.load(`/api/objetos/${man.id}/modelo.rsm?v=${man.version}`).catch((e) => toast(e.message, true));
   } else if (viewer) viewer.start();
 }
+
+function calibRow(man) {
+  const c = man.correccion_calibracion_dual;
+  if (!c) return [];
+  if (!c.aplicada) return [['Calibración dual', `sin corregir (${c.muestras}/${c.tomas} tomas)`]];
+  return [['Calibración dual', c.mm > 5 || c.deg > 0.5 ? `desajuste ${c.mm} mm · ${c.deg}° (corregido)` : 'correcta']];
+}
+
+$('btn-calib').addEventListener('click', async () => {
+  if (!confirm('¿Guardar como calibración dual la corrección medida por este escaneo? (se puede deshacer en el estudio de calibración)')) return;
+  try {
+    const r = await api('/api/objscan/aplicar_calibracion', { method: 'POST' });
+    toast(`Calibración dual actualizada (corrección de ${r.mm} mm · ${r.deg}°).`);
+    $('btn-calib').classList.add('hidden');
+  } catch (e) { toast(e.message, true); }
+});
 
 async function togglePublish(id, published) {
   const man = await api(`/api/objetos/${id}/publicar`, { method: 'POST', body: { publicado: !published } });
