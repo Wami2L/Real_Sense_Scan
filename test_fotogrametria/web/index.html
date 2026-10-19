@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Alineación Virtual · Dual RealSense Live 3D</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Barra Superior -->
+  <header class="app-header glass">
+    <div class="header-left">
+      <div class="brand-icon">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="m3 7 9 5 9-5"/><path d="M12 12v10"/></svg>
+      </div>
+      <div>
+        <h1>RealSense <span class="grad">Live 3D</span> · Alineación Virtual</h1>
+        <p class="subtitle">Entorno Dividido de Fusión Multi-Cámara (Puerto 5005)</p>
+      </div>
+    </div>
+
+    <div class="header-center">
+      <!-- Selector de Modo de Vista -->
+      <div class="view-tabs">
+        <button id="tab-split" class="tab-btn active" title="Ver visor 3D y panel de alineación lado a lado">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3 3h8v18H3zm10 0h8v18h-8z"/></svg>
+          Vista Dividida
+        </button>
+        <button id="tab-3d" class="tab-btn" title="Ver solo el entorno 3D a pantalla completa">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          Entorno 3D
+        </button>
+        <button id="tab-matches" class="tab-btn" title="Inspeccionar cámaras y capturas a pantalla completa">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M15 3h6v6h-2V6.41l-4.29 4.3-1.42-1.42 4.3-4.29H15V3zM9 21H3v-6h2v2.59l4.29-4.3 1.42 1.42-4.3 4.29H9v2z"/></svg>
+          Entorno Cámaras
+        </button>
+      </div>
+
+      <!-- Slider de Control de Ancho de la Ventana -->
+      <div class="panel-width-control" title="Desliza para cambiar el ancho de la ventana de alineación">
+        <span class="ctrl-icon">⇼</span>
+        <span class="ctrl-lbl">Ancho Ventana:</span>
+        <input type="range" id="sl-panel-width" min="360" max="850" value="490" step="10">
+        <span id="lbl-panel-width" class="width-val">490px</span>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <div id="live-indicator" class="status-indicator online">
+        <span class="dot"></span>
+        <span id="live-status-text">Entorno 3D Activo</span>
+      </div>
+      <a href="http://localhost:5002" target="_blank" class="btn-external" title="Abrir visor original en pestaña nueva">
+        Puerto 5002 ↗
+      </a>
+    </div>
+  </header>
+
+  <!-- Contenedor Principal de Trabajo con Splitter Deslizante -->
+  <main class="workspace" id="workspace">
+    <!-- Panel Izquierdo: Entorno 3D en Vivo (Three.js WebGL con Control Reactivo en Caliente) -->
+    <section class="viewport-3d" id="viewport-3d">
+      <div class="viewport-overlay-header">
+        <span class="badge-3d">🌐 Entorno 3D en Vivo · Dual Point Cloud</span>
+        <span class="hint-3d">Arrastra para rotar · Rueda para zoom · Sincronizado en tiempo real</span>
+      </div>
+      <iframe id="iframe-3d" src="/viewer3d" title="Visor 3D Three.js"></iframe>
+    </section>
+
+    <!-- Divisor Deslizante / Resizer Arrastrable -->
+    <div class="resizer" id="resizer" title="Haz clic y arrastra este slider para cambiar el ancho de la ventana">
+      <div class="resizer-handle"></div>
+    </div>
+
+    <!-- Panel Derecho: Estudio de Capturas y Alineación en el Entorno de Cámaras -->
+    <aside class="panel-photogrammetry glass" id="panel-photogrammetry">
+      
+      <!-- 1. Botones Principales de Captura y Alineación -->
+      <div class="studio-actions-group">
+        <button id="btn-take-capture" class="btn-action btn-capture" title="Capturar instantáneamente lo que ven ambas cámaras ahora">
+          <span class="btn-icon">📸</span>
+          <div class="btn-col">
+            <span class="btn-title">Tomar Nueva Captura</span>
+            <span class="btn-sub">Guarda la toma actual de Cam 1 y Cam 2</span>
+          </div>
+        </button>
+
+        <button id="btn-align" class="btn-action btn-align" title="Ejecutar Alineación Virtual y proyectar la fusión en el entorno de las cámaras">
+          <span class="btn-icon">🪄</span>
+          <div class="btn-col">
+            <span class="btn-title">Alinear con Esta Captura</span>
+            <span class="btn-sub">Fusiona en 3D y refleja en las cámaras</span>
+          </div>
+        </button>
+      </div>
+
+      <!-- Barra de Estado Dinámica -->
+      <div id="status-banner" class="status-banner info">
+        Presiona <strong>"📸 Tomar Nueva Captura"</strong> y luego <strong>"🪄 Alinear con Esta Captura"</strong> para ver el alineado reflejado en las cámaras.
+      </div>
+
+      <!-- 2. Visor de Cámaras & Diagnóstico Interactivo -->
+      <div class="camera-studio-box">
+        <div class="studio-header">
+          <div class="visor-modes">
+            <button id="vtab-live" class="vtab-btn active" title="Ver lo que las cámaras transmiten en directo">
+              <span class="live-dot-mini"></span>
+              En Vivo
+            </button>
+            <button id="vtab-snapshot" class="vtab-btn" title="Ver la foto original capturada">
+              📸 Toma
+            </button>
+            <button id="vtab-overlay" class="vtab-btn" title="Ver la fusión 2D en perspectiva con ambas cámaras superpuestas">
+              🔮 Fusión 2D
+            </button>
+            <button id="vtab-anaglyph" class="vtab-btn" title="Ver anaglifo estéreo 3D (Rojo / Cian)">
+              🔴 Anaglifo
+            </button>
+            <button id="vtab-epipolar" class="vtab-btn" title="Ver líneas de nivel epipolar para comprobar alturas">
+              📏 Nivel
+            </button>
+            <button id="vtab-matches" class="vtab-btn" title="Ver rayos de correspondencia 3D">
+              🎯 Rayos
+            </button>
+          </div>
+          <span id="visor-badge" class="visor-badge live">🔴 EN DIRECTO</span>
+        </div>
+
+        <!-- Pantalla del Visor de Cámaras -->
+        <div class="visor-viewport" id="visor-viewport">
+          <div id="capture-flash" class="capture-flash"></div>
+          <img id="visor-img" src="/api/live_stream" alt="Visor de Cámaras Dual">
+          
+          <div id="visor-loader" class="visor-loader hidden">
+            <div class="spinner"></div>
+            <span id="loader-text">Procesando alineación y fusionando cámaras...</span>
+          </div>
+        </div>
+
+        <!-- Barra de Control de Opacidad de Fusión 2D (Visible en modo Fusión 2D) -->
+        <div class="overlay-opacity-bar hidden" id="overlay-opacity-bar">
+          <span class="bar-lbl">Fusión:</span>
+          <span class="cam-lbl">Cam 1</span>
+          <input type="range" id="sl-overlay-alpha" min="0" max="100" value="50" step="5">
+          <span class="cam-lbl">Cam 2 Reproyectada</span>
+          <span id="lbl-overlay-alpha" class="alpha-val">50%</span>
+        </div>
+      </div>
+
+      <!-- 3. Tiras / Galería de Tomas Realizadas -->
+      <div class="captures-section">
+        <div class="captures-header">
+          <div class="captures-title">
+            <span>🎞️ Galería de Tomas (<span id="captures-count">0</span>)</span>
+          </div>
+          <button id="btn-clear-captures" class="btn-tiny" title="Borrar todas las capturas del historial">Vaciar Galería</button>
+        </div>
+
+        <div class="captures-strip" id="captures-strip">
+          <div class="gallery-empty" id="gallery-empty">
+            <span>No hay capturas aún. Pulsa <strong>"Tomar Nueva Captura"</strong> arriba para comenzar.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. Tarjetas de Métricas de Calidad -->
+      <div class="metrics-row">
+        <div class="metric-mini">
+          <span class="m-lbl">Solape (Fitness)</span>
+          <span id="m-fitness" class="m-val highlight">-- %</span>
+        </div>
+        <div class="metric-mini">
+          <span class="m-lbl">Error Residual</span>
+          <span id="m-rmse" class="m-val">-- mm</span>
+        </div>
+        <div class="metric-mini">
+          <span class="m-lbl">Tiempo Cómputo</span>
+          <span id="m-time" class="m-val">-- ms</span>
+        </div>
+      </div>
+
+      <!-- 5. Sliders de Ajuste Manual Fino en Vivo (Directo a Three.js en caliente) -->
+      <div class="sliders-section">
+        <div class="sliders-header">
+          <span>Ajuste Manual Fino en Vivo</span>
+          <button id="btn-reset-pose" class="btn-tiny" title="Restaurar a calibración base física">Restaurar</button>
+        </div>
+
+        <!-- Traslación X -->
+        <div class="slider-group">
+          <div class="slider-label">
+            <span>Traslación X (Lateral):</span>
+            <span id="val-tx" class="slider-val">-60.0 cm</span>
+          </div>
+          <div class="slider-controls">
+            <button class="step-btn" data-axis="tx" data-delta="-2">-</button>
+            <input type="range" id="sl-tx" min="-110" max="0" step="0.5" value="-60">
+            <button class="step-btn" data-axis="tx" data-delta="2">+</button>
+          </div>
+        </div>
+
+        <!-- Traslación Y -->
+        <div class="slider-group">
+          <div class="slider-label">
+            <span>Traslación Y (Altura):</span>
+            <span id="val-ty" class="slider-val">+2.0 cm</span>
+          </div>
+          <div class="slider-controls">
+            <button class="step-btn" data-axis="ty" data-delta="-1">-</button>
+            <input type="range" id="sl-ty" min="-30" max="30" step="0.5" value="2">
+            <button class="step-btn" data-axis="ty" data-delta="1">+</button>
+          </div>
+        </div>
+
+        <!-- Traslación Z -->
+        <div class="slider-group">
+          <div class="slider-label">
+            <span>Traslación Z (Profundidad):</span>
+            <span id="val-tz" class="slider-val">+20.0 cm</span>
+          </div>
+          <div class="slider-controls">
+            <button class="step-btn" data-axis="tz" data-delta="-2">-</button>
+            <input type="range" id="sl-tz" min="-30" max="60" step="0.5" value="20">
+            <button class="step-btn" data-axis="tz" data-delta="2">+</button>
+          </div>
+        </div>
+
+        <!-- Rotación Yaw -->
+        <div class="slider-group">
+          <div class="slider-label">
+            <span>Rotación Yaw (Convergencia):</span>
+            <span id="val-yaw" class="slider-val">+48.0°</span>
+          </div>
+          <div class="slider-controls">
+            <button class="step-btn" data-axis="yaw" data-delta="-1">-</button>
+            <input type="range" id="sl-yaw" min="15" max="80" step="0.5" value="48">
+            <button class="step-btn" data-axis="yaw" data-delta="1">+</button>
+          </div>
+        </div>
+
+        <!-- Rotación Pitch -->
+        <div class="slider-group">
+          <div class="slider-label">
+            <span>Rotación Pitch (Inclinación):</span>
+            <span id="val-pitch" class="slider-val">+3.0°</span>
+          </div>
+          <div class="slider-controls">
+            <button class="step-btn" data-axis="pitch" data-delta="-1">-</button>
+            <input type="range" id="sl-pitch" min="-25" max="25" step="0.5" value="3">
+            <button class="step-btn" data-axis="pitch" data-delta="1">+</button>
+          </div>
+        </div>
+
+        <!-- Rotación Roll -->
+        <div class="slider-group">
+          <div class="slider-label">
+            <span>Rotación Roll (Nivel):</span>
+            <span id="val-roll" class="slider-val">-4.0°</span>
+          </div>
+          <div class="slider-controls">
+            <button class="step-btn" data-axis="roll" data-delta="-1">-</button>
+            <input type="range" id="sl-roll" min="-25" max="25" step="0.5" value="-4">
+            <button class="step-btn" data-axis="roll" data-delta="1">+</button>
+          </div>
+        </div>
+      </div>
+
+    </aside>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

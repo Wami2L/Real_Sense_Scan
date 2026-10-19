@@ -1,0 +1,64 @@
+{
+    "enabled": true,
+    "cameras": [
+        {
+            "id": "cam1",
+            "serial": "207322250777",
+            "name": "RealSense D455 (Master)",
+            "role": "master",
+            "sync_mode": 0,
+            "emitter_enabled": true,
+            "profile": [
+                848,
+                480,
+                30
+            ]
+        },
+        {
+            "id": "cam2",
+            "serial": "203522251709",
+            "name": "RealSense D455 (Slave)",
+            "role": "slave",
+            "sync_mode": 0,
+            "emitter_enabled": false,
+            "profile": [
+                848,
+                480,
+                30
+            ]
+        }
+    ],
+    "extrinsics_cam2_to_cam1": {
+        "is_calibrated": true,
+        "calibration_date": "2026-10-16 15:46:01",
+        "rmse_mm": 5.21,
+        "matrix_4x4": [
+            [
+                0.3287517810741466,
+                0.17283757658033322,
+                0.928466175238718,
+                -0.95
+            ],
+            [
+                -0.21525393508649943,
+                0.9709477554413933,
+                -0.10452846326765347,
+                0.065
+            ],
+            [
+                -0.9195585951261364,
+                -0.16549207934266083,
+                0.35640477242103386,
+                0.26
+            ],
+            [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ]
+        ],
+        "fitness": 0.3096,
+        "method": "calibraci\u00f3n actual + ICP"
+    }
+}

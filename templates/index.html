@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RealSense 3D Scanner</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar glass-panel">
+            <div class="logo">
+                <i data-lucide="scan-line"></i>
+                <h1>ScanPro 3D</h1>
+            </div>
+            
+            <nav class="nav-menu">
+                <a href="#" class="nav-item active">
+                    <i data-lucide="camera"></i> Escáner
+                </a>
+                <a href="#" class="nav-item">
+                    <i data-lucide="folder"></i> Saves
+                </a>
+                <a href="#" class="nav-item">
+                    <i data-lucide="settings"></i> Ajustes
+                </a>
+            </nav>
+            
+            <div class="system-status">
+                <div class="status-indicator online"></div>
+                <span>Cámara Conectada</span>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-bar">
+                <h2>Escaneo en vivo con Mapa de Calor</h2>
+                <div class="user-profile">
+                    <div class="avatar"></div>
+                </div>
+            </header>
+
+            <div class="workspace">
+                <div class="camera-container glass-panel dual-feed">
+                    <div class="feed-header">Visión RGB</div>
+                    <div class="camera-feed-wrapper">
+                        <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Feed Color" />
+                        <div class="crosshair"></div>
+                    </div>
+                    
+                    <div class="feed-header">Mapa de Calor (Profundidad)</div>
+                    <div class="camera-feed-wrapper">
+                        <img id="depthFeed" src="{{ url_for('depth_feed') }}" alt="Feed Profundidad" />
+                    </div>
+                </div>
+
+                <div class="controls-container">
+                    <!-- Tarjeta de Captura Única -->
+                    <div class="control-card glass-panel">
+                        <h3>Captura 3D Dual (Single)</h3>
+                        <p>Genera nubes de puntos con color y mapa de calor de la vista actual.</p>
+                        
+                        <button id="captureBtn" class="primary-btn pulse-anim">
+                            <i data-lucide="aperture"></i> Capturar Vista
+                        </button>
+                        
+                        <button id="reloadBtn" class="secondary-btn" style="margin-top: 10px; width: 100%; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); color: white; padding: 12px; border-radius: 8px; cursor: pointer; transition: 0.3s; display: flex; justify-content: center; align-items: center; gap: 10px;">
+                            <i data-lucide="refresh-cw"></i> Recargar Cámara
+                        </button>
+                    </div>
+
+                    <!-- Tarjeta de Multi-Captura -->
+                    <div class="control-card glass-panel" id="multiScanCard">
+                        <h3>Mapeo 3D Multi-Foto</h3>
+                        <p>Combina varias capturas girando la cámara (o el objeto) para generar un mapa completo.</p>
+                        
+                        <!-- Controles de sesión -->
+                        <div id="multiInitControls">
+                            <button id="multiStartBtn" class="primary-btn" style="background: var(--success); box-shadow: 0 4px 14px rgba(16, 185, 129, 0.4);">
+                                <i data-lucide="scan"></i> Iniciar Mapeo Multi-Foto
+                            </button>
+                        </div>
+                        
+                        <div id="multiActiveControls" class="hidden">
+                            <div class="multi-stats">
+                                <span id="multiCountBadge" class="badge">0 vistas</span>
+                                <span id="multiHint" class="hint-text">Gira la cámara ~20° entre fotos.</span>
+                            </div>
+
+                            <div class="multi-actions">
+                                <button id="multiAddBtn" class="primary-btn">
+                                    <i data-lucide="plus-circle"></i> Añadir Foto
+                                </button>
+                                <button id="multiUndoBtn" class="secondary-btn icon-only" title="Deshacer última">
+                                    <i data-lucide="undo"></i>
+                                </button>
+                            </div>
+
+                            <div class="multi-actions-secondary">
+                                <button id="multiFinishBtn" class="primary-btn" style="background: var(--primary-hover);">
+                                    <i data-lucide="check-check"></i> Procesar Mapeo
+                                </button>
+                                <button id="multiDiscardBtn" class="danger-btn icon-only" title="Descartar sesión">
+                                    <i data-lucide="trash-2"></i>
+                                </button>
+                            </div>
+                            
+                            <!-- Barra de progreso (para finish) -->
+                            <div id="multiProgressContainer" class="hidden">
+                                <div class="progress-bar"><div id="multiProgressFill" class="progress-fill"></div></div>
+                                <div id="multiProgressText" class="progress-text">Procesando...</div>
+                            </div>
+                        </div>
+                        
+                    </div>
+
+                    <div id="statusMessage" class="status-message hidden"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script>
+        lucide.createIcons();
+    </script>
+</body>
+</html>

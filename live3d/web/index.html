@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RealSense Live 3D · Geometría en tiempo real</title>
+  <meta name="description" content="Visor WebGL en tiempo real de la geometría capturada por una cámara Intel RealSense: nube de puntos y malla reconstruidas en la GPU.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/css/style.css">
+  <script type="importmap">
+    { "imports": {
+        "three": "/assets/vendor/three.module.min.js",
+        "three/addons/controls/OrbitControls.js": "/assets/vendor/OrbitControls.js"
+    } }
+  </script>
+</head>
+<body>
+  <main class="app" id="app">
+    <section class="viewport" id="viewport" aria-label="Visor 3D">
+      <canvas id="view-canvas"></canvas>
+
+      <!-- Cabecera -->
+      <header class="topbar">
+        <div class="brand glass">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="m3 7 9 5 9-5"/><path d="M12 12v10"/></svg>
+          </div>
+          <div>
+            <h1>RealSense <span class="grad">Live 3D</span></h1>
+            <p class="brand-sub" id="device-label">Conectando…</p>
+          </div>
+          <span class="pill" id="conn-pill" data-state="connecting"><i></i><span id="conn-text">Conectando</span></span>
+        </div>
+
+        <div class="hud glass" id="hud" aria-live="off">
+          <div class="stat"><span class="stat-v" id="st-stream">–</span><span class="stat-k">FPS stream</span></div>
+          <div class="stat"><span class="stat-v" id="st-render">–</span><span class="stat-k">FPS render</span></div>
+          <div class="stat"><span class="stat-v" id="st-points">–</span><span class="stat-k">puntos</span></div>
+          <div class="stat"><span class="stat-v" id="st-mbps">–</span><span class="stat-k">Mbps</span></div>
+          <div class="stat"><span class="stat-v" id="st-lat">–</span><span class="stat-k">latencia ms</span></div>
+          <div class="stat"><span class="stat-v" id="st-cam">–</span><span class="stat-k">FPS cámara</span></div>
+        </div>
+      </header>
+
+      <!-- Estado centrado cuando no hay geometría -->
+      <div class="overlay" id="overlay">
+        <div class="loader"><span></span><span></span><span></span></div>
+        <h2 id="overlay-title">Conectando con el servidor</h2>
+        <p id="overlay-msg">Esperando el stream de geometría…</p>
+      </div>
+
+      <!-- Barra inferior -->
+      <footer class="dock glass">
+        <button class="dock-btn" id="btn-freeze" title="Congelar / reanudar (Espacio)">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+          <span>Congelar</span>
+        </button>
+        <span class="dock-sep"></span>
+        <button class="dock-btn icon" data-view="front" title="Vista frontal">Frontal</button>
+        <button class="dock-btn icon" data-view="side" title="Vista lateral">Lateral</button>
+        <button class="dock-btn icon" data-view="top" title="Vista superior">Superior</button>
+        <button class="dock-btn icon" data-view="orbit" title="Vista 3/4">3/4</button>
+        <span class="dock-sep"></span>
+        <button class="dock-btn primary-glow" id="btn-save-scan" title="Guardar Escaneo en Saves/ (C)">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          <span>Guardar Escaneo</span>
+        </button>
+        <button class="dock-btn" id="btn-open-saves" title="Ver historial de escaneos guardados">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          <span>Saves</span>
+        </button>
+        <span class="dock-sep"></span>
+        <button class="dock-btn" id="btn-shot" title="Guardar captura PNG">PNG</button>
+        <button class="dock-btn" id="btn-ply" title="Exportar el cuadro actual como PLY (Z arriba, listo para Blender)">PLY</button>
+        <button class="dock-btn" id="btn-full" title="Pantalla completa (F)">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+        </button>
+      </footer>
+
+      <p class="hint">Arrastrar: orbitar · Rueda: zoom · Clic der.: desplazar · <kbd>C</kbd> guardar escaneo · <kbd>M</kbd> modo · <kbd>1-4</kbd> color · <kbd>H</kbd> panel</p>
+      <div class="toast" id="toast" role="status"></div>
+    </section>
+
+    <!-- Panel lateral -->
+    <aside class="panel glass" id="panel" aria-label="Controles">
+      <button class="panel-toggle" id="panel-toggle" title="Mostrar / ocultar panel (H)" aria-label="Mostrar u ocultar panel">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+      </button>
+      <div class="panel-scroll">
+
+        <!-- Módulo de Escaneo Unificado -->
+        <section class="group">
+          <h3>Escaneo y Mapeo 3D</h3>
+
+          <!-- Controles de Modo Dual (se muestran si hay 2 cámaras) -->
+          <div id="dual-cam-controls" style="margin-bottom:12px; display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span style="font-size:0.75rem; color:var(--cyan); font-weight:600;">✨ Modo Dual Activo</span>
+              <button class="btn-action" id="btn-dual-calibrate" style="padding:3px 8px; font-size:0.7rem;" title="Calibrar posición relativa con tablero ChArUco">Calibrar ChArUco</button>
+            </div>
+            <div class="seg seg-3" id="seg-dual-cam" role="radiogroup" aria-label="Vista del visor 3D">
+              <button data-view="dual" class="on">Dual 3D</button>
+              <button data-view="cam1">Cam 1</button>
+              <button data-view="cam2">Cam 2</button>
+            </div>
+            <label class="tg" style="margin-top:8px;" title="Cam 2 solo completa lo que Cam 1 no ve: una sola superficie, sin duplicados"><input type="checkbox" id="tg-dedup" checked><span></span>Sensor único (sin duplicados)</label>
+            <button class="btn-action primary" id="btn-dual-capture" style="width:100%; margin-top:8px; background:linear-gradient(135deg, #3b82f6, #8b5cf6);" title="Capturar simultáneamente de ambas cámaras y fusionar">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+              <span>Captura Dual 360°</span>
+            </button>
+
+            <!-- Calibración Interactiva y Auto-Alineación ICP sin tablero -->
+            <!-- Calibración Interactiva y Auto-Alineación ICP sin tablero -->
+            <details id="details-calibration" class="calib-details" open>
+              <summary class="calib-summary">
+                <span>🎯 Calibración y Fusión (Alineación)</span>
+                <span id="calib-status-badge" class="badge-calib">Alineado</span>
+              </summary>
+              <div class="calib-body">
+                <div class="calib-toolbar">
+                  <button class="btn-action primary" id="btn-auto-align" style="flex:1; background:linear-gradient(135deg, #06b6d4, #3b82f6); font-size:0.72rem;" title="Alinear automáticamente con ICP multiescala sin tablero">
+                    🪄 Auto-Alinear Sujeto (ICP)
+                  </button>
+                  <button class="btn-action" id="btn-reset-extrinsics" style="padding:4px 8px; font-size:0.72rem;" title="Restablecer a la calibración guardada">↺</button>
+                </div>
+
+                <div class="calib-sliders-grid">
+                  <div class="calib-slider-row">
+                    <label>ΔX: <span id="val-tx">-61.8</span> cm</label>
+                    <input type="range" id="rng-tx" min="-100" max="100" step="0.2" value="-61.8">
+                  </div>
+                  <div class="calib-slider-row">
+                    <label>ΔY: <span id="val-ty">2.9</span> cm</label>
+                    <input type="range" id="rng-ty" min="-60" max="60" step="0.2" value="2.9">
+                  </div>
+                  <div class="calib-slider-row">
+                    <label>ΔZ: <span id="val-tz">25.2</span> cm</label>
+                    <input type="range" id="rng-tz" min="-60" max="60" step="0.2" value="25.2">
+                  </div>
+                  <div class="calib-slider-row">
+                    <label>Yaw: <span id="val-yaw">52.9</span>°</label>
+                    <input type="range" id="rng-yaw" min="-120" max="120" step="0.5" value="52.9">
+                  </div>
+                  <div class="calib-slider-row">
+                    <label>Pitch: <span id="val-pitch">2.9</span>°</label>
+                    <input type="range" id="rng-pitch" min="-60" max="60" step="0.5" value="2.9">
+                  </div>
+                  <div class="calib-slider-row">
+                    <label>Roll: <span id="val-roll">-4.5</span>°</label>
+                    <input type="range" id="rng-roll" min="-60" max="60" step="0.5" value="-4.5">
+                  </div>
+                </div>
+
+                <div style="display:flex; gap:6px; margin-top:8px;">
+                  <button class="btn-action" id="btn-save-extrinsics" style="flex:1; font-size:0.72rem;" title="Guardar calibración permanentemente">
+                    💾 Guardar Calibración
+                  </button>
+                </div>
+              </div>
+            </details>
+          </div>
+          
+          <div class="scan-btn-grid">
+            <button class="btn-action primary" id="btn-panel-capture" title="Capturar cuadro actual en formato Saves/">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+              <span>Captura Simple</span>
+            </button>
+            <button class="btn-action" id="btn-reload-cam" title="Reiniciar pipeline de cámara">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
+            </button>
+          </div>
+
+          <!-- Multi-Scan Card -->
+          <div class="multiscan-box" id="multiscan-box">
+            <div class="multi-header">
+              <span style="font-size:0.8rem; font-weight:600;">Mapeo Multi-Foto</span>
+              <span id="multi-count" class="multi-badge">Inactivo</span>
+            </div>
+            
+            <p id="multi-hint" class="multi-hint">Combina varias capturas girando el objeto para generar un modelo 360° con Open3D.</p>
+
+            <!-- Controles cuando está inactivo -->
+            <div id="multi-idle-controls">
+              <button class="btn-action primary" id="btn-multi-start" style="width:100%;">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                <span>Iniciar Mapeo 360°</span>
+              </button>
+            </div>
+
+            <!-- Controles cuando está activo -->
+            <div id="multi-active-controls" style="display:none;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <span style="font-size:0.72rem; color:var(--muted);">Calidad registro:</span>
+                <span id="multi-quality-pill" class="pill-quality quality-buena">–</span>
+              </div>
+
+              <div class="multi-actions-row">
+                <button class="btn-action primary" id="btn-multi-add" title="Añadir vista actual">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                  <span>Añadir Foto</span>
+                </button>
+                <button class="btn-action" id="btn-multi-undo" title="Deshacer última vista">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
+                </button>
+              </div>
+
+              <!-- Tira de miniaturas -->
+              <div class="multi-thumbs" id="multi-thumbs"></div>
+
+              <div class="multi-actions-row" style="margin-top:6px;">
+                <button class="btn-action primary" id="btn-multi-finish" style="background:#10b981; color:#fff;" title="Procesar ICP, TSDF y generar malla">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  <span>Procesar Malla</span>
+                </button>
+                <button class="btn-action danger" id="btn-multi-discard" title="Descartar sesión">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                </button>
+              </div>
+
+              <div class="progress-box" id="multi-progress-box" style="display:none;">
+                <div class="progress-track"><div class="progress-bar-fill" id="multi-progress-bar"></div></div>
+                <span class="progress-label" id="multi-progress-label">Alineando nubes de puntos...</span>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+        <section class="group">
+          <h3>Visualización</h3>
+          <div class="seg" id="seg-mode" role="radiogroup" aria-label="Modo de geometría">
+            <button data-v="points" class="on">Puntos</button>
+            <button data-v="mesh">Malla</button>
+          </div>
+          <label class="lbl">Color</label>
+          <div class="seg seg-5" id="seg-color" role="radiogroup" aria-label="Modo de color">
+            <button data-v="rgb" class="on">RGB</button>
+            <button data-v="depth">Prof.</button>
+            <button data-v="normals">Normal</button>
+            <button data-v="clay">Arcilla</button>
+            <button data-v="overlap" title="Diagnóstico: Cam 1 en Cian / Cam 2 en Magenta">Solape</button>
+          </div>
+          <div class="ctrl" id="ctrl-psize">
+            <div class="ctrl-row"><label for="rng-psize">Tamaño de punto</label><output id="out-psize">1.25×</output></div>
+            <input type="range" id="rng-psize" min="0.5" max="4" step="0.05" value="1.25">
+          </div>
+          <div class="ctrl" id="ctrl-edge">
+            <div class="ctrl-row"><label for="rng-edge">Corte de bordes</label><output id="out-edge">4%</output></div>
+            <input type="range" id="rng-edge" min="0.005" max="0.2" step="0.005" value="0.04">
+          </div>
+          <div class="toggles">
+            <label class="tg"><input type="checkbox" id="tg-fly" checked><span></span>Ocultar píxeles voladores</label>
+            <label class="tg"><input type="checkbox" id="tg-round"><span></span>Puntos redondos</label>
+            <label class="tg"><input type="checkbox" id="tg-grid" checked><span></span>Rejilla</label>
+            <label class="tg"><input type="checkbox" id="tg-gizmo" checked><span></span>Gizmo de cámara</label>
+            <label class="tg"><input type="checkbox" id="tg-rotate"><span></span>Auto-rotar</label>
+          </div>
+        </section>
+
+        <section class="group">
+          <h3>Cámara <small>(servidor)</small></h3>
+          <label class="lbl" for="sel-profile">Perfil</label>
+          <select id="sel-profile">
+            <option value="848,480,848,480,30">848×480 · 30 FPS (recomendado)</option>
+            <option value="848,480,848,480,60">848×480 · 60 FPS</option>
+            <option value="848,480,1280,720,30">Prof. 848×480 · RGB HD 1280×720</option>
+            <option value="640,480,640,480,30">640×480 · 30 FPS</option>
+            <option value="1280,720,1280,720,30">1280×720 · 30 FPS</option>
+            <option value="480,270,424,240,30">480×270 · 30 FPS (USB 2)</option>
+          </select>
+          <label class="lbl">Decimación <small id="dec-res"></small></label>
+          <div class="seg seg-4" id="seg-dec" role="radiogroup" aria-label="Decimación">
+            <button data-v="1">1×</button>
+            <button data-v="2" class="on">2×</button>
+            <button data-v="3">3×</button>
+            <button data-v="4">4×</button>
+          </div>
+          <div class="ctrl">
+            <div class="ctrl-row"><label for="rng-near">Distancia mínima</label><output id="out-near">0.20 m</output></div>
+            <input type="range" id="rng-near" min="0" max="3" step="0.05" value="0.2">
+          </div>
+          <div class="ctrl">
+            <div class="ctrl-row"><label for="rng-far">Distancia máxima</label><output id="out-far">4.00 m</output></div>
+            <input type="range" id="rng-far" min="0.3" max="10" step="0.05" value="4">
+          </div>
+          <label class="lbl" for="sel-preset">Preset del sensor</label>
+          <select id="sel-preset">
+            <option value="default">Por defecto</option>
+            <option value="high_density">Alta densidad</option>
+            <option value="medium_density">Densidad media</option>
+            <option value="high_accuracy">Alta precisión</option>
+            <option value="hand">Manos</option>
+          </select>
+          <div class="toggles">
+            <label class="tg"><input type="checkbox" id="tg-temporal" checked><span></span>Filtro temporal</label>
+            <label class="tg"><input type="checkbox" id="tg-spatial"><span></span>Filtro espacial</label>
+            <label class="tg"><input type="checkbox" id="tg-hole"><span></span>Relleno de huecos</label>
+            <label class="tg"><input type="checkbox" id="tg-emitter" checked><span></span>Emisor IR</label>
+          </div>
+          <div class="ctrl">
+            <div class="ctrl-row"><label for="rng-jpeg">Calidad JPEG</label><output id="out-jpeg">75</output></div>
+            <input type="range" id="rng-jpeg" min="30" max="95" step="5" value="75">
+          </div>
+        </section>
+
+        <section class="group group-info">
+          <h3>Stream</h3>
+          <dl class="kv" id="kv">
+            <div><dt>Perfil activo</dt><dd id="kv-profile">–</dd></div>
+            <div><dt>Geometría</dt><dd id="kv-geo">–</dd></div>
+            <div><dt>Proceso cámara</dt><dd id="kv-proc">–</dd></div>
+            <div><dt>Codificación</dt><dd id="kv-enc">–</dd></div>
+            <div><dt>Tamaño de cuadro</dt><dd id="kv-frame">–</dd></div>
+            <div><dt>Descartados</dt><dd id="kv-drop">–</dd></div>
+            <div><dt>Clientes</dt><dd id="kv-clients">–</dd></div>
+          </dl>
+        </section>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Modal Historial de Saves -->
+  <div class="modal-backdrop" id="modal-saves" aria-hidden="true" role="dialog">
+    <div class="modal-card">
+      <header class="modal-header">
+        <h2>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          Historial de Escaneos (Saves/)
+        </h2>
+        <button class="modal-close" id="btn-close-saves" title="Cerrar modal">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </header>
+      <div class="modal-body">
+        <div id="saves-loading" style="text-align:center; padding:30px; color:var(--muted);">Cargando escaneos guardados…</div>
+        <div id="saves-empty" style="display:none; text-align:center; padding:40px; color:var(--muted);">
+          <p>No se encontraron escaneos en la carpeta <code>Saves/</code>.</p>
+          <p style="font-size:0.8rem; margin-top:8px;">Pulsa "Captura 3D" o realiza un "Mapeo Multi-Foto" para crear uno.</p>
+        </div>
+        <div class="saves-grid" id="saves-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/assets/js/main.js"></script>
+</body>
+</html>

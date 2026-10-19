@@ -1,0 +1,23 @@
+# ==============================================================================
+# Dependencias Principales · RealSenseScans (Dual RealSense Live 3D)
+# Compatible con Python 3.10, 3.11 y 3.12 (64-bit)
+# ==============================================================================
+
+# Hardware & Adquisición Intel RealSense
+pyrealsense2>=2.54.0
+
+# Procesamiento Geométrico 3D y Reconstrucción
+open3d>=0.18.0
+
+# Visión por Computador 2D & Álgebra Lineal
+opencv-python>=4.8.0
+numpy>=1.24.0
+scipy>=1.11.0
+pillow>=10.0.0
+
+# Servidor Web Asíncrono & WebSockets
+aiohttp>=3.9.0
+
+# Generación y Compilación de Documentación Técnica a PDF
+markdown>=3.5.0
+xhtml2pdf>=0.2.15

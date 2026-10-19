@@ -1,0 +1,445 @@
+%PDF-1.4
+%“Œ‹ž ReportLab Generated PDF document (opensource)
+1 0 obj
+<<
+/F1 2 0 R /F2 3 0 R /F3 4 0 R /F4 25 0 R /F5 33 0 R
+>>
+endobj
+2 0 obj
+<<
+/BaseFont /Helvetica /Encoding /WinAnsiEncoding /Name /F1 /Subtype /Type1 /Type /Font
+>>
+endobj
+3 0 obj
+<<
+/BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding /Name /F2 /Subtype /Type1 /Type /Font
+>>
+endobj
+4 0 obj
+<<
+/BaseFont /Courier /Encoding /WinAnsiEncoding /Name /F3 /Subtype /Type1 /Type /Font
+>>
+endobj
+5 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/01_Soporte_Dual_RealSense.md)
+>> /Border [ 0 0 0 ] /Rect [ 435.9449 550.3384 450.7174 565.0634 ] /Subtype /Link /Type /Annot
+>>
+endobj
+6 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/01_Soporte_Dual_RealSense.pdf)
+>> /Border [ 0 0 0 ] /Rect [ 458.6404 550.3384 477.6404 565.0634 ] /Subtype /Link /Type /Annot
+>>
+endobj
+7 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/02_Roadmap_y_Mejoras_Sugeridas.md)
+>> /Border [ 0 0 0 ] /Rect [ 435.9449 495.5259 450.7174 510.2509 ] /Subtype /Link /Type /Annot
+>>
+endobj
+8 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/02_Roadmap_y_Mejoras_Sugeridas.pdf)
+>> /Border [ 0 0 0 ] /Rect [ 458.6404 495.5259 477.6404 510.2509 ] /Subtype /Link /Type /Annot
+>>
+endobj
+9 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/03_Unificacion_Scans_y_Live3D.md)
+>> /Border [ 0 0 0 ] /Rect [ 435.9449 440.7134 450.7174 455.4384 ] /Subtype /Link /Type /Annot
+>>
+endobj
+10 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/03_Unificacion_Scans_y_Live3D.pdf)
+>> /Border [ 0 0 0 ] /Rect [ 458.6404 440.7134 477.6404 455.4384 ] /Subtype /Link /Type /Annot
+>>
+endobj
+11 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/04_Implementacion_Dual_Camera_Scan.md)
+>> /Border [ 0 0 0 ] /Rect [ 435.9449 378.5384 450.7174 393.2634 ] /Subtype /Link /Type /Annot
+>>
+endobj
+12 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/04_Implementacion_Dual_Camera_Scan.pdf)
+>> /Border [ 0 0 0 ] /Rect [ 458.6404 378.5384 477.6404 393.2634 ] /Subtype /Link /Type /Annot
+>>
+endobj
+13 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/05_Modo_Renderizado_Dual_En_Vivo.md)
+>> /Border [ 0 0 0 ] /Rect [ 435.9449 309.0009 450.7174 323.7259 ] /Subtype /Link /Type /Annot
+>>
+endobj
+14 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/05_Modo_Renderizado_Dual_En_Vivo.pdf)
+>> /Border [ 0 0 0 ] /Rect [ 458.6404 309.0009 477.6404 323.7259 ] /Subtype /Link /Type /Annot
+>>
+endobj
+15 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/06_Plan_Implementacion_Captura_Dual_Claude.md)
+>> /Border [ 0 0 0 ] /Rect [ 435.9449 239.4634 450.7174 254.1884 ] /Subtype /Link /Type /Annot
+>>
+endobj
+16 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/06_Plan_Implementacion_Captura_Dual_Claude.pdf)
+>> /Border [ 0 0 0 ] /Rect [ 458.6404 239.4634 477.6404 254.1884 ] /Subtype /Link /Type /Annot
+>>
+endobj
+17 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/07_Plan_Calibracion_Interactiva_y_Fusion_Sin_Duplicados.md)
+>> /Border [ 0 0 0 ] /Rect [ 435.9449 177.2884 450.7174 192.0134 ] /Subtype /Link /Type /Annot
+>>
+endobj
+18 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/07_Plan_Calibracion_Interactiva_y_Fusion_Sin_Duplicados.pdf)
+>> /Border [ 0 0 0 ] /Rect [ 458.6404 177.2884 477.6404 192.0134 ] /Subtype /Link /Type /Annot
+>>
+endobj
+19 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/08_Fotogrametria_RGBD_y_Calibracion_Automatica_Tiempo_Real.md)
+>> /Border [ 0 0 0 ] /Rect [ 435.9449 107.7509 450.7174 122.4759 ] /Subtype /Link /Type /Annot
+>>
+endobj
+20 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/08_Fotogrametria_RGBD_y_Calibracion_Automatica_Tiempo_Real.pdf)
+>> /Border [ 0 0 0 ] /Rect [ 458.6404 107.7509 477.6404 122.4759 ] /Subtype /Link /Type /Annot
+>>
+endobj
+21 0 obj
+<<
+/Annots [ 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R 14 0 R 
+  15 0 R 16 0 R 17 0 R 18 0 R 19 0 R 20 0 R ] /Contents 54 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 53 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 
+  /Trans <<
+
+>> /Type /Page
+>>
+endobj
+22 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/09_Documentacion_Cambios_Alineacion_Virtual_y_Estudio_Capturas.md)
+>> /Border [ 0 0 0 ] /Rect [ 435.9449 713.3759 450.7174 728.1009 ] /Subtype /Link /Type /Annot
+>>
+endobj
+23 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/09_Documentacion_Cambios_Alineacion_Virtual_y_Estudio_Capturas.pdf)
+>> /Border [ 0 0 0 ] /Rect [ 458.6404 713.3759 477.6404 728.1009 ] /Subtype /Link /Type /Annot
+>>
+endobj
+24 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/01_Soporte_Dual_RealSense.md)
+>> /Border [ 0 0 0 ] /Rect [ 63.81162 596.6774 242.7631 614.5024 ] /Subtype /Link /Type /Annot
+>>
+endobj
+25 0 obj
+<<
+/BaseFont /Symbol /Name /F4 /Subtype /Type1 /Type /Font
+>>
+endobj
+26 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/02_Roadmap_y_Mejoras_Sugeridas.md)
+>> /Border [ 0 0 0 ] /Rect [ 63.81162 422.9274 280.4716 440.7524 ] /Subtype /Link /Type /Annot
+>>
+endobj
+27 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/03_Unificacion_Scans_y_Live3D.md)
+>> /Border [ 0 0 0 ] /Rect [ 63.81162 302.5024 262.5891 320.3274 ] /Subtype /Link /Type /Annot
+>>
+endobj
+28 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/04_Implementacion_Dual_Camera_Scan.md)
+>> /Border [ 0 0 0 ] /Rect [ 63.81162 182.0774 304.7596 199.9024 ] /Subtype /Link /Type /Annot
+>>
+endobj
+29 0 obj
+<<
+/Annots [ 22 0 R 23 0 R 24 0 R 26 0 R 27 0 R 28 0 R ] /Contents 55 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 53 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 
+  /Trans <<
+
+>> /Type /Page
+>>
+endobj
+30 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/05_Modo_Renderizado_Dual_En_Vivo.md)
+>> /Border [ 0 0 0 ] /Rect [ 63.81162 718.9524 292.5926 736.7774 ] /Subtype /Link /Type /Annot
+>>
+endobj
+31 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/06_Plan_Implementacion_Captura_Dual_Claude.md)
+>> /Border [ 0 0 0 ] /Rect [ 63.81162 540.7024 347.5626 558.5274 ] /Subtype /Link /Type /Annot
+>>
+endobj
+32 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/07_Plan_Calibracion_Interactiva_y_Fusion_Sin_Duplicados.md)
+>> /Border [ 0 0 0 ] /Rect [ 63.81162 399.5024 410.2146 417.3274 ] /Subtype /Link /Type /Annot
+>>
+endobj
+33 0 obj
+<<
+/BaseFont /Courier-Bold /Encoding /WinAnsiEncoding /Name /F5 /Subtype /Type1 /Type /Font
+>>
+endobj
+34 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/08_Fotogrametria_RGBD_y_Calibracion_Automatica_Tiempo_Real.md)
+>> /Border [ 0 0 0 ] /Rect [ 63.81162 176.9274 449.7976 194.7524 ] /Subtype /Link /Type /Annot
+>>
+endobj
+35 0 obj
+<<
+/Annots [ 30 0 R 31 0 R 32 0 R 34 0 R ] /Contents 56 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 53 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 
+  /Trans <<
+
+>> /Type /Page
+>>
+endobj
+36 0 obj
+<<
+/A <<
+/S /URI /Type /Action /URI (file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/09_Documentacion_Cambios_Alineacion_Virtual_y_Estudio_Capturas.md)
+>> /Border [ 0 0 0 ] /Rect [ 63.81162 681.9024 468.9796 699.7274 ] /Subtype /Link /Type /Annot
+>>
+endobj
+37 0 obj
+<<
+/Annots [ 36 0 R ] /Contents 57 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 53 0 R /Resources <<
+/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
+>> /Rotate 0 
+  /Trans <<
+
+>> /Type /Page
+>>
+endobj
+38 0 obj
+<<
+/Outlines 40 0 R /PageMode /UseNone /Pages 53 0 R /Type /Catalog
+>>
+endobj
+39 0 obj
+<<
+/Author () /CreationDate (D:20261016170843-05'00') /Creator (\(unspecified\)) /Keywords () /ModDate (D:20261016170843-05'00') /Producer (xhtml2pdf <https://github.com/xhtml2pdf/xhtml2pdf/>) 
+  /Subject () /Title () /Trapped /False
+>>
+endobj
+40 0 obj
+<<
+/Count 3 /First 41 0 R /Last 41 0 R /Type /Outlines
+>>
+endobj
+41 0 obj
+<<
+/Count -2 /Dest [ 21 0 R /Fit ] /First 42 0 R /Last 43 0 R /Parent 40 0 R /Title (Planes de Desarrollo y Mejoras \267 RealSenseScans)
+>>
+endobj
+42 0 obj
+<<
+/Dest [ 21 0 R /Fit ] /Next 43 0 R /Parent 41 0 R /Title (Tabla Resumen de Estado de los Planes)
+>>
+endobj
+43 0 obj
+<<
+/Count -9 /Dest [ 29 0 R /Fit ] /First 44 0 R /Last 52 0 R /Parent 41 0 R /Prev 42 0 R 
+  /Title (Detalle de Contenido por Plan)
+>>
+endobj
+44 0 obj
+<<
+/Dest [ 29 0 R /Fit ] /Next 45 0 R /Parent 43 0 R /Title (1. 01_Soporte_Dual_RealSense.md)
+>>
+endobj
+45 0 obj
+<<
+/Dest [ 29 0 R /Fit ] /Next 46 0 R /Parent 43 0 R /Prev 44 0 R /Title (2. 02_Roadmap_y_Mejoras_Sugeridas.md)
+>>
+endobj
+46 0 obj
+<<
+/Dest [ 29 0 R /Fit ] /Next 47 0 R /Parent 43 0 R /Prev 45 0 R /Title (3. 03_Unificacion_Scans_y_Live3D.md)
+>>
+endobj
+47 0 obj
+<<
+/Dest [ 29 0 R /Fit ] /Next 48 0 R /Parent 43 0 R /Prev 46 0 R /Title (4. 04_Implementacion_Dual_Camera_Scan.md)
+>>
+endobj
+48 0 obj
+<<
+/Dest [ 35 0 R /Fit ] /Next 49 0 R /Parent 43 0 R /Prev 47 0 R /Title (5. 05_Modo_Renderizado_Dual_En_Vivo.md)
+>>
+endobj
+49 0 obj
+<<
+/Dest [ 35 0 R /Fit ] /Next 50 0 R /Parent 43 0 R /Prev 48 0 R /Title (6. 06_Plan_Implementacion_Captura_Dual_Claude.md)
+>>
+endobj
+50 0 obj
+<<
+/Dest [ 35 0 R /Fit ] /Next 51 0 R /Parent 43 0 R /Prev 49 0 R /Title (7. 07_Plan_Calibracion_Interactiva_y_Fusion_Sin_Duplicados.md)
+>>
+endobj
+51 0 obj
+<<
+/Dest [ 35 0 R /Fit ] /Next 52 0 R /Parent 43 0 R /Prev 50 0 R /Title (8. 08_Fotogrametria_RGBD_y_Calibracion_Automatica_Tiempo_Real.md)
+>>
+endobj
+52 0 obj
+<<
+/Dest [ 37 0 R /Fit ] /Parent 43 0 R /Prev 51 0 R /Title (9. 09_Documentacion_Cambios_Alineacion_Virtual_y_Estudio_Capturas.md)
+>>
+endobj
+53 0 obj
+<<
+/Count 4 /Kids [ 21 0 R 29 0 R 35 0 R 37 0 R ] /Type /Pages
+>>
+endobj
+54 0 obj
+<<
+/Filter [ /ASCII85Decode /FlateDecode ] /Length 3237
+>>
+stream
+Gb!l"968iI'#+6Ei3_T>XYG&5`8!+kS=QXhG*6NO0"s"Rj2alM$7.!`rUnnF8V!T^'@8#bloHR[#kS5_m]X5'd1d2f:[Rn(M9sR)o]%etPbHcW6j4?>p'SL#SUEVI%:?K=Q4t"P'8D`B0P=>eDf<3!Ad34S,l2lm;Z.RK=Ajuf9>mflro5k'N#6u1&ulV&0V_Sn&n.@;71rSWU%@0aCfP;u]KfQ;-EHI4/1^>rh%]T`SSc_*9,)\NAEDQT[40tpfkU*ec0j!G#IF9YG4cs'0MTuK.>.lbP%fR_D)@tG0ATN-G+D8O1rkQO*$.`Eek.o8JL'>Zlf=E:YYGA2K$EaX$a;2565/sc=\O5K8i=L99dQ/0'+*s[1W)nm6m,TldP=N.kEmJG1#Z`u4QHdLKt2O_iE9TW;VF63Q,6I,QliTuE^'QLiF]c7Dhqnt"_`'W)8jBpbGjk5Ejr8jV">&`L:XKI\Se(jSYH^.msb=YLDg\nM1sq9?Bm:sEru^qYXecs#o4sE3sWM<h$P[P]>knrKGfPg"!nA+rtCe[N^R85&D7LL8olqQ@Zn)BRXkU><2WW@R1_ujbXQ=DR(Hq;"/T@Ka3eeKMeiW%V9X/n)iS:#!FO,Yh/g%a5cF4ImPZ^Q!+#<""eOug^cEc0L8NhA$'k[MDSTJW)<b5()=UkrA9N<<Pr`]gX)c4#X):G]>rdK'o@R#+ap)QP:s:%A+\fd"(sL`6"f[Vlfd&)eUjsH%"K*5[MYRa&9sT)M6H*Q+TffC-"oR-iW%RXU]mqA_8k<%L\m"P2aTc>La5(3/jP*n1nC8`/2Le6_-J?4sUcFB60_V3OcYWT]G9HF6<A:UaTZ_E>fr&YO(GJa]c!n"2Q5QuLJ4YYPaK]g=!b@@8#HHS\9iHimpXAKe5UoJG:-0>%B#&(\c)V:'iG2c]]4J8$_QWbFIY&a6C5"Q-oVncJ$bL[`XO'[Bs*J(#??NlkE-]O)5/07i1J-WMQn@:Ygp/\eC"tmiT7O\2.pX^XojYIV<u/$"V/bia1X#gcl5I''KH^UX-$GF:q>5nN``i95)0SL8;NDRN$K/0%QDd(Uq[?iHSe4U"Q19E_GXrZ&S/neg'NWHOYQbB.+uNJ4'W\Ac!9i/h+0O:/bHpP@R6fN`R*[V@GgV)Z`a$tK*9mW(,8)Q2M)O$%EhqqZb\lrb?%<+kYg0E8+&BQQ8Kfd@1PP\GM5'28b-L\KJKQ$t`9UN#(VubQ9;l6J63K6:AX#uHB]97V\sCdQGc%`^)p6H^cr>N=@9Fp+%tj"r?t0,_&A%uO8Xl!\MYoeIO*"YmSX>_`c%;n$'oR(<?-!u'oM,UJXd)e$9?DW>CBuE=i-%F<%Sc>#ZAWVf&.M@:m<PN7+=K8^kM5aC%am^I"&/H583+McNKN\TUr;"#dZYg#H,^[Wg3b\)T5qPrF2H-9d_00F[ND;H9J&ND48XR0+C"M+')G15M.3U>#WXI^gB@C9hsReufB@e4UUK9'J.OV[I!<$d`MOb;Ol&2XT@`mo`M[Ic3/qce[NH^Q;Dg5]BQ$g"KQ`Y3.`K;S5MB?RlC:#%FJQHdBh/5q7,ZK(rAO#aiOgW6$r0/Jn@WPCG;XKgY%N2fXfHbPTUT5t?!LXkE^?$pS[nRNo.()gJ$X+km%DB/j:@C"p7N&-otcCAI%EULdqi,We#T#$^Ir6<bJI`_Dn`#T70jR,D68<6b/N.45VMek5<QF^oL)=9#Q=%_*>PX"CtiGtM()s.4DIZK5iIGko<g>4#`4kQ:C4is*&<`Z+E]EfO;S_f>hL\nAB!]"ac^p5B_a#b_I=@ho=^[g(PA*G$=]aD?5U`Ap.^gsQeC)"om,chmYVnap2CL)KZL@U!h*RaaiQMi!Ct)>\uU``jT.7N3=2pg>s'9`E<uso(LR).HuX4jMD#]O^InK@[<TI-Zb4!5kZogO$Ae&.:p5QKR9,;B"l`UWG_G*>VJ0_GG`2t9V2m=]>s8.-?.@OC\i,&_,0]H@KU3^"@fl9/iKe23q'1*mi^D]k7h:B/a2dR#-?dZ,We9_>msK;-R4TS(/TQ3R^#!n@R4jJ5Bo^9h)SdF%?`!iEhfXRP0k6YDhY"A)/stu`mfAg9,ZQD"[uH9pVhAHTE;J2uQD[':8/tuh-3G2^ImfjYo%m?`cZS(YX#Yk$InX\5e#4q)kAXDt*@_]54o_:%pC^H8RG!A,..I0^r5?_p_;a^Dj1)%96?&eW2/a3l,*nE+YtP>Ao$;j^CXlp9F,t4E@^E0e[-h9L?'a/]?MoI/Zh<N3C(0]1fMY;F%Z]TLIG@;Fk7[p!:2k/*p5MnL:./qkZ$:Z;?=r<Y?/>2"%[Ff1[LfT%`2e1J_R7U*hA51s_DL'6dPdH.pJGX^<U`H&,]4pZ3b=bPkWPE?bU;WK7D9]YJSF^998DD+Mp9g_QV3^0Tsqoo;>Ps]CYjIH^'OO(kY4jd)ob46J)=00I9g]j],D0mgY.#ZS3[kfI,URW0B`\oTC95N+=u^lOGjN20j>@8F_*cA$80Nao_Go1%7[4O'ISOFHelnq'(.dn:dWFISK?Qh+5AVKTf:Ft;>bp(DMETD'AT3gV%]S$"=FZ#["+bu"l[?XNS51_Q?t:[1j]H/b&#p>HK&PZ1H:8+)1,%e=l",<0+156o^%Sl=Q1Cj=Cen\n_6TsW]ds=%$nED3u6MOdChtlRVL1:#_OGknHOaN1fFIo[6]!r;B3Z_N%n,0kC[n<IRb5+EQf?eq-_a5h[p&c*4*Y25$55QGD*dFa/jj.!!Iu6-K#A(8N/lQ5@TH?GG$k?gl_h5)tCoC3Dc\fDTMsVNVMN2)lV7B[q('<7XRKSLDEJnbhL9c0GlpgUkCn&(_;BOFNg=/<8J[3N0cp)3bD/(.W:A*`m^W-*ODXOQ++dP*!-6tPsQF,_sBp93/VDfA"He`#O?L0N\FSpQo3I\_5\Nj,7KktArZJ2Y\M5I#_OF`=Ta9W#RJCd@QPPVNaPc%QmL&@TaEr,7i*XnbSfU4:q`I4UC3>Gk)AnSW*[g+d=o^^Es;gKS8u0[7(#=(0K)&4[#@/F3.D2!FR5SQ=Q1B?SBlgf4*FC:/9-_0cL8TL*P3[-QFOsS*"E+N"D\rs8)g>8TAgs@a*KjES)\D.!i6@Z@Qba1e8_s.J^T9hYoXBSlF:'(5\WTo!/I&U\n+Aenca<#VahNj_b&OAM1eF`;2>$`;MAU)+VK+NiBEZ/dJLi(!"#Db_jknt_o@%J>=\_]':o(<F2]\h~>endstream
+endobj
+55 0 obj
+<<
+/Filter [ /ASCII85Decode /FlateDecode ] /Length 3602
+>>
+stream
+Gb!l!D0+IA&cSA/JIe<3F%m4YnFaNWluOeMUiBiipI-kZRY#CR'WE<+hmo<WpHAtJ+=5&D'fT&ecC%c="=t<!(;%mF.@It9Bn*$R`dXA](WV\1`F]o[HJE#:2sf_\PM_tEa+)d%p*CMI#Dr\Yci$\[R#A.nXC;]=H0iM%5(Y1Z+fd5f'JrP&4A\4PCT^)SflO9?LlTW^M]_AXm%um1L@PBe85DB:L(7[?/bL_6_W$4t4e0C+W>q9gO<O@$,_<8?:V+Gg0"@Pr3<`N:2JUcm3eJ4:[ha;XiR^hM)DEW)qfM[,dq0>Z#s9cU*C`mWB`#Qn"p_8A^gdD'=Umd&nHDK.Xg%U;a,7hI"#RLr!tQl&N5P5]N0O#nP[F_DGu?b9Zd3I]"-D?#"o-s/S\=JUqrOXi4<b1T)4k:;1;J;N_VYaC]s4'O[I6'?]O^Z$9T(GRHS"Ug:\c&uF?(B[Gh@EaM6Sc>\8YcY08-HhY;=1jlR#c!lt+nPPMB=&VU.DUeR?N^def.-40hISnA,(T<r'$nYHmK"hJ%hR"Vku@$N3]/[e@.&6Vh_C9&I8\cscZ'o^oN?+li3aE.u"MFsjsPBg_DDGTU2\R!tn]J,`jp>72!`_g!,J3Ft!:A\)3:U.NdLXoht6L$<f*E0r3&Za0Rm^!*h"oHW/CT<a?uT%u)*KCpE=2s7?4Fd7@M:qtpnAB^=-GcZ+^TI#1UO+QObibK)"Y[">O@rM'JLJYlU+d<eO1(QPpH+'@XVI71:3a@*L6U/Llgh.2dipUI&mC+0D[5ZUu;CP:VO.8%N>ratm:8<%Fqu1gcXECk-7S^J4cB-ag"OYsK]B/odA9/K=bRPTSSK&[-@1eCq*>!UI_S\>E@DmDdIJ>4<L(T*f`W7Z1)"Y`.D>MlP?EauF_=qF)$TGfsIb4MBnQRaQ2/Y.i]iK3\]3uALD,/gu2<]4ARI7J]S)"OC-uF%ZQDd).0@mZ-dC-E=Mn7TtY_gddVsSQ`;h1JA^t1&&(MVP5g!WUM4(gBdqOVlQG*BiY$)>ns1#'6lRj=k%(lb,9-9IQ5PJe.AUXA`$2U**pBKmPLck=&g_F_0BA/>L=&GIJZnEnUofJp@<%_1p[E[L$>'G$Gh@37h4f1+,Q1Er'GVe1`:6H2=7.M+c7gjfs?_m3rLOWdW*b)21b2\uHBb)n(o4B065[m<Y5(uqLBhZl2,MR`*YGOH:j7W*u]M**qY&:eJ7)dHk=>0"AC\eQo=5_6mEL--AFL6T;aYN4HS;96)m&h#X"lj1Ppm"7n#;cD2#0,H]pe?JHc"<H,YAt5XRmsRS'#l>!#s0`WhC(2-ag;uM*rPc%NcgV%r!d4su+3BYC__#'p-UF(t#7?YXFS)>8l+RmE5V=]C.Dnm$m]M^fnU"0%B<4\Mo;&7tUe%\FV6]]g==!7nkt_`M`;]Pnn26gH0\CcO-3L>s/u8E[+aagOK4b"5rAJGsb>HEt10jD8_GmC'1CO5_.W8#7Pa/4N51cC-9uUFg@.T#[8WBu+/IQ0V=Uh:umN9d-BqAS!;5[&4hAm]aT2%QjndiQYoD_!Mk@Hr0k?4?YX08iRXi_jbQTHnl`;TXBY=t(Fks'/C-ckjnp?L`34/d/:'MFhSd3giA]pV)rf/:;parM.PXNQNV6r#ruhq%6;okEflLdiFe!HKY8T>Hb.f:f^3<T'Rk`rRALC/?(\YWJjeg/_r3n6A%F461r7agR0[Q3SAWL*!s73cld2CMdS2d&":/4iA?g'j76'N70B5GGKk'I9/V2hKQNd3QXWa[sZ?$Sogg,HV<c]I!lhA^^V=_<`L+a*d^%hJug;@_!+Z\Icu="iSd<r#Fl8]>%;86:C!EU(k<R:h"H&n%Y9)^&TGEq")q$.^<>oh8KN2dJU;os:m:fE>J'*iJLLe1:k<WaBJ"^]_[bT3;K=50Ud?2H["KHF3;E<#SY0@S('Rq<G]BfjV'YIbOV*]tpIUf%&Se/,07\_@&lL0cP;(87_,8mRdK@qFSu[LR@W`Z0r0=>/T+87o:\!(#M`>CMUo9W9PGS?SXg@+MD[=7t,ZJ[a)1gac_2_;dYm(')kg/Lrdt=WCY4Kg=W.G[IPQ<9LF3fcY#m")9$*ZJf:aV*3Z9#TXHYYg30XnC;oqeWqYOrqf=N@Y#l%.sn@DT-U=dRZpRH<ehE\'l1P-i?69D5DHJ+X$?G'6k'_`u`YmR4]oSU=t?%'kpYf]cDA0NC9h)E#B'r+Dp5-WQS'3a(I^2^Rna7@(gt/8W1#XNs27#j$7\;s5I!J,8TN1NlZ.F^5d/fVL%@ptXL7$1q%X5JX6TlO(Q<(L[h<X>Md.>@-76G7bDIY0$>#"FeMPP*(<#\%*]#_^YAaC%a6)>?h^,G.ultoO-mVcBl0lEN=$:IJ%IGX3WsFfgV2.[B_bR9bG2!LYlXo7N_$VHkfbJs(A^LUF`r,aPQ2/9C9,_9?P-,SVGt&8pK@LQ6+s25e3%XhB<@6Ohia1*u<p(b]J22^;BD)l>X3WNIq+Tm?9)j7(#`#8hsd2,OUE8,:aRf(jq9YVJh$9a%0-6)`0`JEWabY`lI^FD%P;WgVqUD)0$71PGoGh8B-c6&$gS#Deum`f1LBq\op:$g5i^I)8t3?\(K20.=arb&+I)hIRbjf9Cmi>80LP2@Qd%K"C)HX:fAJ[7+?Ak$)EMiOflU<e9)0bFWJBVHC=`_]1!`@]ikmsVg$bADp4()4151e2YZrjh;?bYqJDc\->dQ4pQG["\mTT<V3bdrD5uo<!FCInN$r/9,,IqdI,F@5T3NXEXn_2$:=gXjHfdRH\f=8he*"Eqc,mRN3:4bn7COu3Eo/.`H)g$g+s#<aO1tq/747fM=lYNdOH;1(Tj88J[JQs+<e8]'E*JThLl;]2[jtlXE]&8$7h`<Mj8QDqj-W=UUABnQIaPW[nqHDoCCEsI?\[cG*/YQG8ji!_WU(sSRi96=*WO%"`C,TS'Zas:2s7]0QDq5E@%_GG7cmTlf>*I6T(]]"^(@<V]KFp>p8-mA4=_&eo@meK+$F,2#(JBSX!m4>_,i`$V-fpK$3AiOMm@?+hE@2;da_[_"!%YLTO<L[AT^pP=csGD\6LBr]lDJt&^.8s')RF.FI"%W9&VoZ"1!XU_%4e@]QM'JK!]j58ZR(/RblW[hI-J([?&TCP9nX+b@1-QXqKDc1nD1+T5!ZHUbPLt>*.D1Z!!OVg%e*X\ghJF(?S2P>pntlZa5-32P9%/aoC9T/(j+4o)h.*qA3qJoDm09,s/bc=a`^-]GVdYJF">+@We)GS!2iBZ72!4o7G&5bQkP.n^:&:\-DB36/QkYC(G,1oXi2<]nj]aElIK<o-fE"mCR.o.ehcoEDIt.<O04OLK\oZEOT00&Ikl0Fc6s1-T1W&asfV&")hT/'#T>6/aqFWiU#9YDg$!<%@t.l4LWEnZIp_fW9/!Wpn5-]XUMlfg"mMAjs'pme)-nEnh68_et]=NXUU[qBrIkZ3*\M]IA5@D>tF[uJW,RWd$KXEZLgRg/a!AFY'>rL'Rr:))eSQMZsemn+t$aOn#%dW9SL:1]$e_PbE3mKf(<F1Tsr)lNG.V^2lp>X0A#Ei9`*Db2,3k`jEHjlfTZ=:j@3"C~>endstream
+endobj
+56 0 obj
+<<
+/Filter [ /ASCII85Decode /FlateDecode ] /Length 3497
+>>
+stream
+Gb!l!D/\4>&cSA/5m71k\[1PN]+bq_&j,dj86X'G9majR$X2PmQ.*oGdQ2@X^#.[Z8<MWY:9rX*4ek:S9:R;`_r87h*&bf$8,Z.T`h#uZiJGGlQVA:?n[ZuCYLnctU\Bi+i4mae%NIZU^!L=fi:>5*'<L$bfa2qsn,W`HNnqS^pt0T=[+(S(0o`UB%bcY!OW4'%j0%i2?Gni%FT^2G1#:_uqIo#Gd1\EdVb-'.S+nrU:]+`sO"_("#SS:[bjg'%]?J0L!`n$KbMC)GZ)JOI*;RhM\;*r"a,tgHYpSCH5:SA(W?!qIA'^!VY^siReMaBE\j#l$-r?s%^uOInO2D!flgf%S.K*jjQl9-:TGU3WT`-JXV]#5uVX3m$iWjV0?Xo2\O1?5,Q:#h3O6/NKF*\UI^<6W)2a$[0OG@FM?l8Dn$@=,qIa$hH<#3ieac$Hg=bo)&`Fr"`FrWJQ8/bTA8[dFA%lNk6!,aQM-a?Ht%i]F+16,Q?BTR:?UC.(?F]7;7-G$*jd:=H%=ktVtQ%,N0=YV5I%ac5(UM0p[*_Ug$;30"ZA(M+TPL*%BQ#$u]lHp^G@j0;oTjRhu+,ANQ'_=3teblbAQZ[@ZU*_*W\><ZH;mE^tcN)fi\E[AF:ouD3I'IS\\e:FhX5[<H0b.RtFsBAXSGp;6I#&n%6E_JrZ30BpDRl/8bOJ%Na."`L4tkkiDu/mn!.n\3\R?Gt`\:k*'K[qhO8e8=Pg#95UGuitpDkV*F`S_+!Hp2ZJk\G<WSh,#.oCpC\@niOb],0m69fM+%0uJk4Gg23i^U`VQ"X,")$fcbF]Qi7AX1A,$/bZJAE-*9J"'fq]ZdhG:DeAee!nC-=K^W>Q$M)>W\*g#T6[,3Z"p;S5r8"r[<];8\f'j3-#8f<I37bRHL)kR?AOoD1oD#s?==7Q_18nofi?n[%J,SdG_Q%ZQOh#oQsee'gtCoPCpLI!LL/&s>OqZ^?(fM7+'Q5on/@aGHV=$K5%UN-lpTMQ2B/LcKl">C,B1cd78B_;H/TV$Nb;/]fjn+Dh8(@RUnlZo;0AT]KY<g*^WNlF'/]G75D-$WR6,%;cr9&*f`(;XnmqX-/EW'25,b[o'6tQ%!QC^o2M;hYi]>28\05=4aA'bHNNn*TNOe)r$p@@R)rkHJO91Ms-UI+O29?^4IYQB>oZl\$M>9-\=:?J9Z'3*l1>kS07Rl5%glKp8\fO`XoU@`#KEG6Wl$'id$FqJMp+CP*p=HN;q5TMuNJNeNYJg=Glt":1Umo"T#3`8]@T',=aNh<g5Tan\a+!fWeVh84Ij:QK`0)OU[aD+q!=hj7YG^Meg(G[(I=#&gHYCSc?+B+VL_LBYAod!ai,'aB\8))GlR%g+aBEa>759o>I_04@9,KD_Y([bJ4(>O!RaiFJR[9e!r-I<!F)Ub_CMOYQLpE3LD6<5]s(A'X-@tF@h7Du!>NAf/nu@n583=>&0Xr]T6jq-<Fn#Ba;9d"Um`bRp$+(Ca,-T^c9K.(&XUDCs-90ZW5!hZ?a]Cg`!#]![94;uRD%k^/G<_d<GWW8Ak@Xr2S<kNQ>R:E9pZcLB,Za!4Fd.5PLik%g#]b>qNo58FO\XLa0*h[eS9u^5[1U3>BPW9nl6/_SF&<M/--Pj[@ZEf!&qZsKXEc0XG-sfdM2O]8Ok)J.%W.ST-Lun^2>+6eAXQWCXbGJaObk-&89@'ck#q;)STchhTdb6>aD@JSX;?fOXCO)gZ[@>n1::ggHRY30JWi<H`JV;sAumX2_bCne.@TWA+*]pD*kglRh5-H)nb?!=f`qPE3ZBXc<*r%O^oD!rR69BI?s..X.TK7<npI'p83N1Tc`=FPX!./g_7-F"a7ne%O"P#?$V@MlYGkc0GH#&lJ?>9JUsrS6/$`Lk'L:i,8FeMlGC)M8#nOf51VL`chLFlJ]cb.63qqViUY@sgdQ[7./@fH$_gH19'/@7nlg/gZaX_U4A@SU([_.4po`Beqhn&tRcGd(5EGN0K<>qKD?5eBKbn];&@6PaU"\a3d(0!M39C[9#j=0oR[#lk9@8\2Z_jHZL\mN:BA9sO6U9bGCP9g:NCRU+QSR1(ob\%=3LDKbs^Y`u1T3=UX1r$R%PquCV:fg`(=\;l*K/oYiL\nlfK&>dI\5;fG)>YLgD#5C4Qt*kpLL;1-%K-iOXr6MJ7Mn.o+*%IK"k\9[*cLa>HH=GDkqN\H&A@*n5GTZ@UE<r9[f$d3#$ME00D7cgmHh?f4^&SlXh20?KYJc-KP+goMA@/RQ!PN&0ic,QD(5mKjjQ<VTeEE^<?oQ4[Z:3#`/C1d(1NQ0Nldsp0lt^NXE6hHfsN=s+k:3G#trGI-V2jCBLk?h2=g1Kl24U!8N)eTkqsc0H_302@,^i^Wrh^db=Ul2.9M-0SnWhj[@4\#[nH[]g1g*G(H-(UK*.+FbMY1IT"c$U<IA.k,j6q:5CMfI@W,9)VF'FW"E3jb9V/74J(nU#n$Bdt.>,9qfl%_oT>_$b$mU#PBBOD7?n.T*Kp:8E8:R>o+#_pJ&jVU3dp.]Q[1+J3\cA"V-`T#m(n2W/U)Nl;UXrsHamfj!h8L8Lm="cu+tVWM2Z$HoK`R2FN9IEK%u:fmWN%Y[RGBSk1(4:g1d&gPB84oHL7'%^e71u;3Y"IYnaMJq;-JM,1`ZR(VlgRMLmN'69N56-8*\'D\:NJeN)NB;JJ84R#%UJAdG!XS4+Gelhij't,\b]QA(f^tJ1B,OC=nHQZhAl,de.+r=(gr\Dm539:DGoN\#jS&.7q$l#2@OR\!MAEItU6MD/pR%+*_>Q%?[FGqErej&r3QS3/3?FASDKsZH,\=[[T61doCUZo1sM*8g_^#B4;tV^!"UDH@8dPV'oki(&F@bTk1PjVkhU:bKfCcD<pS1*%-TQdjt:N'1.N<X^lM9*%(cQaM4&]-bc/3`:K2(;tVDmGZi8::S/^RZe<QJ<6udZio\]0q'%];7Bo4KiumF:U%n9[RHC$@X%Z=j;"mm)"4q\o0J,i!qn-FEGg1\JYMW*>95N33,G!1M>H,!';`CC*Q45cEI>m:3MgUqL9\!'@/@Z4eBtIQJc<=]i`=>'anL;)2K84i*hoK"aqG8XJL;_%4L<P?8XpPj6-.a!f:;?P&$g8M`0iAPGRiAn5T=]VWpG6Uf`+1M*Y`ZY%ONh,@<h$jkD)X]Cl7(K3@!^7<#%LCeUbEST5Q@VH=[eKZjDEc=Ye4Q:@=aVCWp!tMJO#d/6X:pqVtsfO8^hWa2>+@LrHkGtTL!X-Qe[9Y2p'1rnWaU[,)=p6Z*nSa%Si"030o@t#&S/H<EFfrG&hcs'D%4rY!2a3jOqpE4/1)#ArQ;fCZBiqADJe).bV?8ijNXRLofoJ8t818hk3/Lh7S4L]2@\)r?9S19m[7<GG)YidQUC5G]/?m:Eb)Ub!lp01#&HCFH=-sRZ0.a'.G>qZ=`l3^??-[^iZba;'GE'oD/!qaifksXrUuaJ0W.W4:`(NZFg5.3hu_,%DQ*ifV<os8a^\B~>endstream
+endobj
+57 0 obj
+<<
+/Filter [ /ASCII85Decode /FlateDecode ] /Length 1910
+>>
+stream
+Gb!;dh/D%+&:`#5EA%EW/n%.GU;X`V8\+rWMDar#AADRug//uL.OCp4+8324W"7&<d`*?T+[ZgqG9ZL9]W^4L6@aQms%H(9*uAnqRK@')=9B"(#`E'KH?&TVkUle_EHOZ@^pmb`7uW7#8DLiKQjOK!nrSV.WRns1&l8pnE_mD,18b=f3&QB//.*[7(37Q-+RYF^?oPSX4Cn9XP)8r:((\]4,*S,/&U`7,[:9r2#dS'cd!19R<3U/uf9BPT)e8KJ1luFU\hQX?k"@=O"f\q2A]d127GTicrV7P3hPsJipMb3Dk4[dIC1S-EW_MqJFfd*Z4JZhc)JJ]A5JlCp*4P49d+3`Mi%H">nGp^d9Mb2;DgV5krIU7&Llm)<:3quH@5>d2,;PL7q\"`n0ePSg!;@$C"qbf:;Zu1lK+TGu5fGiO:+Us;_NC"79D@4=.BnKociqi@&Y.=$Ak@YQ]IRj]oEs'8_*Z"E$l(iT:'):[@[>.R#ne%SPM1kUcB_2+@Q&XDq9sW21M9[Z_YqmY(&Ifs8,$$?BFJM<U:YrUduO]*(Yr4q)!LogSQ5)O!A#u?bX%80j&%F''#l0rmGo&YUZU8*>-#*<HIZYY[\Vai,/]4]H2AHd>:<4s-_W$\8h6NeVJ>_&;j]^Hb+(108`EH.:2u&l>.oD\"mE!AVk.-9@ZI@aT-[bsAK3=\'?ZiSL*noE\N"4I:(i@S887GM4JX]oOmnkBDEgir]P*H"Nf?WI7`R9WeDHSu@uC"LELjm`GQ5=j01cB:%AFgiOK0mqFsYuJ?Cn,sQ`@^A9s_DJmh8jmEnbc;=D_-k:"s6i_*p5-:c5&mp:WW*"c:pqQh.L4d[X'>Y>#<LEI`Unbqe^8jr"6&`p8B_]o(Y^c:7nM_P/.t[pU>`-:j)\*=eA<)%nC'P)LA1;:m6_B?m//SN-u_`$f3X#a/#P6unS4OZrWSk)iEPE?h6GXWKRPn\!)&0rfYr1@85*fNr9@UGmJI@P:t;Gsp-([E:(+hQ(Cd$a]Z&pYTkY*5e%Z<DdF2)=I+I1q8!Jd\bG%jCMW\53=ZO\.4F.%Okm<j83bl)jQl':fq(ja$!WP_aPSDo30tWX0lZd`i;qG2HT'/[DRCRLK1rbW&nj#!tjDgo#)?I1R\H"H,H5s`(3KEr_]P!C*nD)O;]X;MiXj)_/EW,k%>'#Wi%'+7]3i;&=Ij&!<jZtf>$476C'P?dq/;2YF8KlXb1_\`\fjJ<2p:F+`7OuenNkh2g8$+gUMr:=kbeNMTA:e3(.AX9154`mk,?/K(/`tGt>2)L_o"*YP<COn_]RkFeKl]+>^C3b_ujX4X>Cs!mY'tHE_\;o<5c<KGEjrmB*d5C33k_W3A$Z?!FYckla0E'h\+)a*%du9@'/OJVGQ9rU3(oRblGh`[71S%"]d8Jd0&8bEGl7W77]cf>^D":j$?qC0-1.b_%pjbZ2&5_2*AhJ?&+MY3W_YKsL2(7a+A%TaKRPi8t<kh*Bpofk:b_cLKBaRp>mY'U*1i/!(%(s3Hl48'!?fr(VftVl*+:j+JP0+'>6t%nRu+1feS^I<$M>,WPoX.`SkU%BrVr9oO(hR-8gkn=0gZH\p3b0PR$^MTMZ>T("*(:#hpZYnQ0@e&4$E=eCTnnr0Bb-A_)aR!ZV9P8W])!D-mn';L7i5J@RH"O4P$B-\jX1QW[7%&Coe?IfB]H;,I4ct%kfhS':"p#aRCW@.]j3-.)l5F.JUE<tgpe%<9/5/=@nW^4*UD\t0FFd:K(Y?G`S9fp$PBEiG%WU-D?&<q4<RRXd2!):<5e*YLB%#a&9>E;=bLe)ch%?J(!TIh6TMC:S$*_ih<Wk@b)'jTNuXiWrf73D-A\R2u#/9"[XpRT;cF#DV4)dJW]mN]/q)-98sAA`Ig0pELiIPukS^B)=@I6d~>endstream
+endobj
+xref
+0 58
+0000000000 65535 f 
+0000000061 00000 n 
+0000000134 00000 n 
+0000000241 00000 n 
+0000000353 00000 n 
+0000000458 00000 n 
+0000000709 00000 n 
+0000000961 00000 n 
+0000001217 00000 n 
+0000001474 00000 n 
+0000001729 00000 n 
+0000001986 00000 n 
+0000002247 00000 n 
+0000002509 00000 n 
+0000002768 00000 n 
+0000003028 00000 n 
+0000003297 00000 n 
+0000003567 00000 n 
+0000003849 00000 n 
+0000004132 00000 n 
+0000004417 00000 n 
+0000004703 00000 n 
+0000005031 00000 n 
+0000005320 00000 n 
+0000005610 00000 n 
+0000005862 00000 n 
+0000005940 00000 n 
+0000006197 00000 n 
+0000006453 00000 n 
+0000006714 00000 n 
+0000006974 00000 n 
+0000007233 00000 n 
+0000007502 00000 n 
+0000007784 00000 n 
+0000007895 00000 n 
+0000008180 00000 n 
+0000008426 00000 n 
+0000008715 00000 n 
+0000008940 00000 n 
+0000009027 00000 n 
+0000009280 00000 n 
+0000009354 00000 n 
+0000009510 00000 n 
+0000009629 00000 n 
+0000009780 00000 n 
+0000009893 00000 n 
+0000010024 00000 n 
+0000010154 00000 n 
+0000010289 00000 n 
+0000010422 00000 n 
+0000010565 00000 n 
+0000010721 00000 n 
+0000010880 00000 n 
+0000011030 00000 n 
+0000011112 00000 n 
+0000014441 00000 n 
+0000018135 00000 n 
+0000021724 00000 n 
+trailer
+<<
+/ID 
+[<19a067fc3f7f1f89583c5c8e34542ac0><19a067fc3f7f1f89583c5c8e34542ac0>]
+% ReportLab generated PDF document -- digest (opensource)
+
+/Info 39 0 R
+/Root 38 0 R
+/Size 58
+>>
+startxref
+23726
+%%EOF
