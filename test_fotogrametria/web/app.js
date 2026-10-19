@@ -64,6 +64,18 @@ let isAligning = false;
 let isCapturing = false;
 let manualDebounce = null;
 let alphaDebounce = null;
+let manualDirty = false;      // sliders movidos y aún sin guardar: no pisarlos con el estado
+let lastStatus = null;
+
+const liveIndicator = document.getElementById("live-indicator");
+const liveStatusText = document.getElementById("live-status-text");
+const systemBanner = document.getElementById("system-banner");
+const btnSavePose = document.getElementById("btn-save-pose");
+
+const HTML_ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+function escapeHtml(t) {
+  return String(t ?? "").replace(/[&<>"']/g, c => HTML_ESC[c]);
+}
 
 // ==========================================
 // 1. SINCRONIZACIÓN EN TIEMPO REAL CON EL VISOR 3D (THREE.JS)
@@ -264,7 +276,7 @@ async function takeCapture() {
     statusBanner.textContent = `Error al capturar: ${e.message}`;
   } finally {
     isCapturing = false;
-    btnTakeCapture.disabled = false;
+    applySystemState(lastStatus?.system);
   }
 }
 
@@ -290,27 +302,31 @@ async function runAlignment() {
       body: JSON.stringify(payload)
     });
     const data = await res.json();
+    const m = data.metrics || {};
+    const warnList = (data.warnings || []).length
+      ? `<ul class="warn-list">${data.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join("")}</ul>` : "";
+
+    if (m.consistency_pct !== undefined) {
+      mFitness.textContent = `${m.consistency_pct} %`;
+      mRmse.textContent = m.rmse_mm != null ? `${m.rmse_mm} mm (±${m.expected_sigma_mm})` : "-- mm";
+    }
+    mTime.textContent = data.total_time_ms ? `${Math.round(data.total_time_ms)} ms` : "-- ms";
 
     if (data.status === "success") {
-      statusBanner.className = "status-banner success";
-      statusBanner.innerHTML = `✨ <strong>Alineación Reflejada:</strong> Solape <strong>${data.fitness_pct}%</strong> · RMSE <strong>${data.rmse_mm} mm</strong>. Fusión activa en cámaras y visor 3D.`;
-
-      // 1. Actualizar métricas
-      mFitness.textContent = `${data.fitness_pct} %`;
-      mRmse.textContent = `${data.rmse_mm} mm`;
-      mTime.textContent = `${data.total_time_ms} ms`;
-
-      // 2. Sincronizar sliders UI
+      statusBanner.className = data.quality === "buena" ? "status-banner success" : "status-banner warning";
+      statusBanner.innerHTML = `✨ <strong>Alineación ${escapeHtml(data.quality)}</strong>${data.applied ? " · guardada en 5002" : ""}: `
+        + `${escapeHtml(data.message)}${warnList}`;
+      manualDirty = false;
       updateSlidersUI(data.components);
-
-      // 3. APLICAR DIRECTAMENTE AL VISOR 3D (THREE.JS) PARA QUE LA NUBE SE ALINEE DE INMEDIATO
       applyPoseToViewer3D(data.matrix_4x4, data.components);
-
-      // 4. Refrescar estado para registrar URLs de overlay, anaglyph y epipolar
       await refreshStatus();
-
-      // 5. MOSTRAR DIRECTAMENTE LA FUSIÓN SUPERPUESTA EN EL ENTORNO DE LAS CÁMARAS
       setVisorMode("overlay");
+    } else if (data.status === "warning") {
+      // No fiable: no se aplica. Las vistas muestran la calibración VIGENTE para comparar.
+      statusBanner.className = "status-banner warning";
+      statusBanner.innerHTML = `⚠️ <strong>No se aplicó.</strong> ${escapeHtml(data.message)}${warnList}`;
+      await refreshStatus();
+      setVisorMode(data.overlay_url ? "overlay" : "matches");
     } else {
       statusBanner.className = "status-banner error";
       statusBanner.textContent = `Aviso de alineación: ${data.message}`;
@@ -320,7 +336,7 @@ async function runAlignment() {
     statusBanner.textContent = `Error: ${e.message}`;
   } finally {
     isAligning = false;
-    btnAlign.disabled = false;
+    applySystemState(lastStatus?.system);
     visorLoader.classList.add("hidden");
   }
 }
@@ -349,7 +365,8 @@ function renderCapturesStrip() {
     card.dataset.id = cap.id;
 
     const badgeClass = cap.aligned ? "aligned" : "pending";
-    const badgeText = cap.aligned ? `✓ ${cap.fitness_pct}%` : "Sin alinear";
+    const badgeText = cap.aligned ? `✓ ${cap.quality || ""} ${cap.fitness_pct}%`
+      : (cap.quality === "insuficiente" ? "✗ No fiable" : "Sin alinear") + (cap.simulated ? " · sim" : "");
 
     card.innerHTML = `
       <img class="card-thumb" src="${cap.preview_url}" alt="${cap.title}" loading="lazy">
@@ -499,8 +516,15 @@ function sendManualPose() {
   }, 25);
 }
 
+function currentSliderPose() {
+  return {
+    tx: parseFloat(slTx.value), ty: parseFloat(slTy.value), tz: parseFloat(slTz.value),
+    yaw: parseFloat(slYaw.value), pitch: parseFloat(slPitch.value), roll: parseFloat(slRoll.value)
+  };
+}
+
 [slTx, slTy, slTz, slYaw, slPitch, slRoll].forEach(sl => {
-  sl.addEventListener("input", sendManualPose);
+  sl.addEventListener("input", () => { manualDirty = true; sendManualPose(); });
 });
 
 document.querySelectorAll(".step-btn").forEach(btn => {
@@ -510,19 +534,46 @@ document.querySelectorAll(".step-btn").forEach(btn => {
     const slider = document.getElementById("sl-" + axis);
     if (slider) {
       slider.value = (parseFloat(slider.value) + delta).toString();
+      manualDirty = true;
       sendManualPose();
     }
   });
 });
 
-btnResetPose.addEventListener("click", () => {
-  updateSlidersUI({
-    translation_cm: { x: -61.8, y: 2.9, z: 25.2 },
-    rotation_deg: { yaw: 52.9, pitch: 2.9, roll: -4.5 }
-  });
+btnResetPose.addEventListener("click", async () => {
+  await refreshStatus();
+  if (!lastStatus?.current_pose) {
+    statusBanner.className = "status-banner error";
+    statusBanner.textContent = "No hay calibración disponible en 5002.";
+    return;
+  }
+  manualDirty = false;
+  updateSlidersUI(lastStatus.current_pose);
   sendManualPose();
-  statusBanner.textContent = "Pose restaurada a calibración base física.";
+  statusBanner.className = "status-banner info";
+  statusBanner.textContent = "Sliders restaurados a la calibración guardada (no se ha modificado nada).";
 });
+
+if (btnSavePose) {
+  btnSavePose.addEventListener("click", async () => {
+    btnSavePose.disabled = true;
+    try {
+      const res = await fetch("/api/save_pose", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(currentSliderPose())
+      });
+      const data = await res.json();
+      statusBanner.className = data.status === "success" ? "status-banner success" : "status-banner error";
+      statusBanner.textContent = data.message;
+      if (data.status === "success") manualDirty = false;
+    } catch (e) {
+      statusBanner.className = "status-banner error";
+      statusBanner.textContent = `Error al guardar: ${e.message}`;
+    } finally {
+      btnSavePose.disabled = false;
+    }
+  });
+}
 
 // ==========================================
 // 8. CONTROL DE ANCHO DE VENTANA Y RESIZER
@@ -582,10 +633,31 @@ if (resizer) {
 // ==========================================
 // 9. SINCRONIZACIÓN Y ESTADO PERIÓDICO
 // ==========================================
+function applySystemState(sys) {
+  if (!sys) return;
+  const cls = { live: "online", simulated: "sim", degraded: "warn", stale: "warn", starting: "warn" }[sys.state] || "error";
+  liveIndicator.className = `status-indicator ${cls}`;
+  liveStatusText.textContent = sys.label;
+  liveIndicator.title = sys.detail || sys.label;
+
+  if (sys.state === "live") {
+    systemBanner.className = "system-banner hidden";
+  } else {
+    systemBanner.className = `system-banner ${sys.state === "simulated" ? "sim" : (cls === "error" ? "error" : "")}`;
+    systemBanner.innerHTML = `<strong>${escapeHtml(sys.label)}.</strong> ${escapeHtml(sys.detail || "")}`;
+  }
+  btnTakeCapture.disabled = isCapturing || !sys.can_capture;
+  btnTakeCapture.title = sys.can_capture ? "Capturar lo que ven ambas cámaras ahora" : `No disponible: ${sys.label}`;
+  // Una toma ya guardada se puede alinear aunque las cámaras estén caídas
+  btnAlign.disabled = isAligning || (!sys.can_capture && !activeCaptureId);
+}
+
 async function refreshStatus() {
   try {
     const res = await fetch("/api/status");
     const data = await res.json();
+    lastStatus = data;
+    applySystemState(data.system);
 
     if (data.captures) {
       capturesList = data.captures;
@@ -596,10 +668,12 @@ async function refreshStatus() {
       activeCaptureId = data.active_capture_id;
     }
 
-    if (data.current_pose && !document.querySelector("input[type=range]:active")) {
+    if (data.current_pose && !manualDirty && !document.querySelector("input[type=range]:active")) {
       updateSlidersUI(data.current_pose);
     }
-  } catch (e) {}
+  } catch (e) {
+    applySystemState({ state: "offline", label: "Estudio sin respuesta", detail: e.message, can_capture: false });
+  }
 }
 
 async function init() {
@@ -616,7 +690,7 @@ async function init() {
     selectCapture(activeCaptureId);
   }
 
-  setInterval(refreshStatus, 4000);
+  setInterval(refreshStatus, 2000);
 }
 
 init();

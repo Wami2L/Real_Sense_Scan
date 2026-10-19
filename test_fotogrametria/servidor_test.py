@@ -1,263 +1,228 @@
 """
-Servidor Web de Prueba para Alineación Virtual RGB-D en Tiempo Real.
-Puerto: 5005 (Totalmente independiente, NO modifica ningún archivo de live3d ni app.py).
+Estudio de calibración dual (puerto 5005), cliente del servidor Live 3D (puerto 5002).
 
-Características:
-- Receptor persistente WebSocket con el servidor principal (puerto 5002).
-- Proxy transparente /viewer3d para control instantáneo y en caliente del visor 3D Three.js (Mismo origen).
-- Fusión 2D Superpuesta (Reproyección 3D de Cam 2 sobre Cam 1 con control de opacidad).
-- Anaglifo 3D Estéreo (Rojo / Cian) y Modo de Nivel Epipolar Horizontal.
-- Transmisión en vivo de ambas cámaras en tiempo real (MJPEG Stream).
-- Capturas de instantáneas manuales personalizadas por el usuario con galería múltiple.
-- Alineación Virtual multi-hipótesis + Point-to-Plane ICP sobre la captura elegida.
-- Sliders manuales de ajuste fino a 60 Hz sincronizados en vivo con Three.js.
+- Receptor WebSocket persistente del stream dual de 5002 (último cuadro de cada cámara).
+- Estado veraz: servidor caído, simulación, cámara caída o congelada (sin cuadros nuevos).
+- Galería de tomas emparejadas (solo si ambas cámaras están en vivo y sincronizadas).
+- Alineación Cam 2 -> Cam 1 con el motor único live3d/alignment.py (el mismo que usa 5002).
+  Solo se aplica y se guarda en 5002 si el resultado es fiable.
+- Vistas de verificación: fusión 2D, anaglifo, nivel epipolar y correspondencias.
+- Sliders: previsualizan en el visor 3D; guardar es una acción explícita.
+
+NOTA: es transitorio. El plan 10 (Fase 3) lo integra en el servidor 5002 como /studio.
 """
 
+import asyncio
+import json
 import os
 import sys
-import json
-import asyncio
 import time
-import urllib.request
-from aiohttp import web
+
 import aiohttp
 import cv2
 import numpy as np
+from aiohttp import web
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from test_fotogrametria.calibrador import (
-    AlineadorVirtual,
-    matrix_to_euler_translation,
-    euler_translation_to_matrix
-)
-from test_fotogrametria.test_cli import apply_extrinsics_to_live_viewer
-from live3d import protocol
+from live3d import protocol  # noqa: E402
+from live3d.alignment import (RGBDView, align_pair, deproject, draw_matches, public_result,  # noqa: E402
+                              transform)
+from live3d.registration import euler_translation_to_matrix, matrix_to_euler_translation  # noqa: E402
 
 PORT = 5005
+LIVE3D = "http://localhost:5002"
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 CAPTURES_DIR = os.path.join(STATIC_DIR, "captures")
 LIVE3D_WEB_DIR = os.path.join(BASE_DIR, "live3d", "web")
+STALE_S = 1.5          # sin cuadros de una cámara durante más tiempo -> congelada
+MAX_PAIR_DT_S = 0.25   # cuadros de las dos cámaras más separados -> no forman una toma
+MAX_CAPTURES = 15
 os.makedirs(CAPTURES_DIR, exist_ok=True)
 
 
-class LiveCameraReceiver:
-    """Mantiene conexión WebSocket permanente con puerto 5002 para cuadros en vivo con latencia 0 ms."""
+class PairUnavailable(RuntimeError):
+    pass
 
-    def __init__(self, ws_url="http://localhost:5002/ws"):
+
+class LiveCameraReceiver:
+    """Mantiene el último cuadro de cada cámara del stream dual de 5002."""
+
+    def __init__(self, ws_url=LIVE3D.replace("http", "ws", 1) + "/ws"):
         self.ws_url = ws_url
         self.metas = {}
-        self.latest_frames = {}
-        self.latest_preview_jpeg = None
+        self.latest = {}          # cam_idx -> (cuadro decodificado, meta, hora de recepción)
+        self.connected = False
+        self.last_error = None
         self.running = False
         self.fps = 0.0
-        self.frame_count = 0
-        self.last_update_time = time.time()
+        self._n, self._t0 = 0, time.time()
+        self._seq = 0
+        self._preview, self._preview_seq = None, -1
 
     async def run(self):
         self.running = True
-        print(f"[Receiver] Conectando a {self.ws_url} ...")
         while self.running:
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.ws_connect(self.ws_url, timeout=10.0) as ws:
-                        await ws.send_str(json.dumps({
-                            "type": "subscribe",
-                            "depth": "zlib",
-                            "color": "jpeg",
-                            "ack": False
-                        }))
-                        print("[Receiver] Suscripción activa al stream dual de cámaras.")
-
+                    async with session.ws_connect(self.ws_url, timeout=10.0, max_msg_size=0) as ws:
+                        await ws.send_str(json.dumps({"type": "subscribe", "client": "estudio",
+                                                      "depth": "zlib", "color": "jpeg", "ack": False}))
+                        self.connected, self.last_error = True, None
+                        print("[Receptor] Suscrito al stream dual de 5002.")
                         async for msg in ws:
                             if not self.running:
                                 break
                             if msg.type == aiohttp.WSMsgType.TEXT:
-                                data = json.loads(msg.data)
-                                if data.get("type") == "meta":
-                                    self.metas[data.get("meta_id")] = data
+                                self._on_text(json.loads(msg.data))
                             elif msg.type == aiohttp.WSMsgType.BINARY:
-                                h = protocol.parse_header(msg.data)
-                                cam_idx = h["flags"] & 0x01
-                                meta = self.metas.get(h["meta_id"])
-                                if meta:
-                                    try:
-                                        decoded = protocol.decode_frame(msg.data, meta)
-                                        self.latest_frames[cam_idx] = (decoded, meta)
-                                        if 0 in self.latest_frames and 1 in self.latest_frames:
-                                            self._update_preview()
-                                            self.frame_count += 1
-                                            now = time.time()
-                                            if now - self.last_update_time >= 1.0:
-                                                self.fps = self.frame_count / (now - self.last_update_time)
-                                                self.frame_count = 0
-                                                self.last_update_time = now
-                                    except Exception:
-                                        pass
-            except Exception as e:
-                print(f"[Receiver] Reconectando en 1.5s: {e}")
+                                self._on_frame(msg.data)
+            except Exception as e:  # noqa: BLE001
+                self.last_error = str(e) or e.__class__.__name__
+            self.connected = False
+            if self.running:
                 await asyncio.sleep(1.5)
 
-    def _update_preview(self):
-        """Genera un cuadro side-by-side optimizado para el stream en vivo."""
+    def _on_text(self, data):
+        t = data.get("type")
+        if t == "meta":
+            self.metas[data["meta_id"]] = data
+        elif t == "source_changed":  # cambió la fuente en 5002: nada de lo anterior es válido
+            self.metas.clear()
+            self.latest.clear()
+
+    def _on_frame(self, buf):
+        h = protocol.parse_header(buf)
+        meta = self.metas.get(h["meta_id"])
+        if not meta:
+            return
         try:
-            f0, _ = self.latest_frames[0]
-            f1, _ = self.latest_frames[1]
-            img1 = cv2.imdecode(np.frombuffer(f0["color"], np.uint8), cv2.IMREAD_COLOR)
-            img2 = cv2.imdecode(np.frombuffer(f1["color"], np.uint8), cv2.IMREAD_COLOR)
-            if img1 is None or img2 is None:
-                return
+            fr = protocol.decode_frame(buf, meta)
+        except ValueError:
+            return
+        self.latest[h["flags"] & 1] = (fr, meta, time.time())
+        self._seq += 1
+        self._n += 1
+        now = time.time()
+        if now - self._t0 >= 1.0:
+            self.fps, self._n, self._t0 = self._n / (now - self._t0), 0, now
 
-            h, w = 320, 565
-            im1_res = cv2.resize(img1, (w, h))
-            im2_res = cv2.resize(img2, (w, h))
+    def cam_ages(self):
+        now = time.time()
+        return {i: round(now - self.latest[i][2], 2) for i in self.latest}
 
-            cv2.rectangle(im1_res, (0, 0), (w, 32), (18, 18, 24), -1)
-            cv2.circle(im1_res, (16, 16), 6, (0, 255, 120), -1)
-            cv2.putText(im1_res, "CAM 1 (MASTER) - EN VIVO", (30, 22),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
-
-            cv2.rectangle(im2_res, (0, 0), (w, 32), (18, 18, 24), -1)
-            cv2.circle(im2_res, (16, 16), 6, (255, 200, 0), -1)
-            cv2.putText(im2_res, "CAM 2 (SLAVE) - EN VIVO", (30, 22),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
-
-            combined = np.hstack([im1_res, im2_res])
-            cv2.line(combined, (w, 0), (w, h), (0, 200, 255), 2)
-
-            _, buf = cv2.imencode('.jpg', combined, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            self.latest_preview_jpeg = buf.tobytes()
-        except Exception:
-            pass
+    def preview_jpeg(self):
+        """Vista lado a lado bajo demanda (solo cuando alguien la mira) y cacheada por cuadro."""
+        if self._preview_seq == self._seq and self._preview is not None:
+            return self._preview
+        ages = self.cam_ages()
+        tiles = []
+        for i in (0, 1):
+            tile = np.full((320, 565, 3), 24, np.uint8)
+            if i in self.latest:
+                img = cv2.imdecode(np.frombuffer(self.latest[i][0]["color"], np.uint8), cv2.IMREAD_COLOR)
+                if img is not None:
+                    tile = cv2.resize(img, (565, 320))
+            stale = ages.get(i) is None or ages[i] > STALE_S
+            label = f"CAM {i + 1} - " + ("SIN SENAL" if i not in ages else
+                                          f"CONGELADA ({ages[i]:.0f} s)" if stale else "EN VIVO")
+            cv2.rectangle(tile, (0, 0), (565, 32), (18, 18, 24), -1)
+            cv2.circle(tile, (16, 16), 6, (60, 60, 230) if stale else (0, 255, 120), -1)
+            cv2.putText(tile, label, (30, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+            tiles.append(tile)
+        combined = np.hstack(tiles)
+        cv2.line(combined, (565, 0), (565, 320), (0, 200, 255), 2)
+        self._preview = cv2.imencode(".jpg", combined, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes()
+        self._preview_seq = self._seq
+        return self._preview
 
     def get_instant_pair(self):
-        """Retorna el par de imágenes y nubes de profundidad instantáneas actuales."""
-        if 0 not in self.latest_frames or 1 not in self.latest_frames:
-            return None
-
-        f0, m0 = self.latest_frames[0]
-        f1, m1 = self.latest_frames[1]
-
-        img1 = cv2.imdecode(np.frombuffer(f0["color"], np.uint8), cv2.IMREAD_COLOR)
-        img2 = cv2.imdecode(np.frombuffer(f1["color"], np.uint8), cv2.IMREAD_COLOR)
-        depth1 = f0["depth"].copy()
-        depth2 = f1["depth"].copy()
-
-        intr1 = {
-            "fx": m0["color"]["fx"], "fy": m0["color"]["fy"],
-            "ppx": m0["color"]["ppx"], "ppy": m0["color"]["ppy"]
-        }
-        intr2 = {
-            "fx": m1["color"]["fx"], "fy": m1["color"]["fy"],
-            "ppx": m1["color"]["ppx"], "ppy": m1["color"]["ppy"]
-        }
-        scale1 = float(m0["depth"]["scale"])
-        scale2 = float(m1["depth"]["scale"])
-
-        return {
-            "img1": img1, "depth1": depth1, "intr1": intr1, "scale1": scale1,
-            "img2": img2, "depth2": depth2, "intr2": intr2, "scale2": scale2,
-            "timestamp": time.strftime("%H:%M:%S")
-        }
+        """Par de vistas RGB-D de ambas cámaras. Lanza PairUnavailable con el motivo concreto."""
+        if not self.connected:
+            raise PairUnavailable("Sin conexión con el servidor 5002" +
+                                  (f" ({self.last_error})" if self.last_error else ""))
+        missing = [i for i in (0, 1) if i not in self.latest]
+        if missing:
+            raise PairUnavailable("No llegan cuadros de " + " ni ".join(f"Cam {i + 1}" for i in missing) +
+                                  ". ¿El servidor 5002 está en modo dual con ambas cámaras?")
+        ages = self.cam_ages()
+        frozen = [i for i in (0, 1) if ages[i] > STALE_S]
+        if frozen:
+            raise PairUnavailable(", ".join(f"Cam {i + 1} congelada ({ages[i]:.1f} s sin cuadros)" for i in frozen))
+        views = []
+        for i in (0, 1):
+            fr, meta, _ = self.latest[i]
+            img = cv2.imdecode(np.frombuffer(fr["color"], np.uint8), cv2.IMREAD_COLOR)
+            if img is None:
+                raise PairUnavailable(f"Cam {i + 1}: el cuadro llegó sin color")
+            views.append(RGBDView.from_meta(img, fr["depth"].copy(), meta, fr["timestamp"], f"Cam {i + 1}"))
+        dt = abs(views[0].timestamp - views[1].timestamp)
+        if dt > MAX_PAIR_DT_S:
+            raise PairUnavailable(f"Cuadros desincronizados: Δt = {dt * 1000:.0f} ms entre cámaras")
+        return {"views": views, "dt_ms": round(dt * 1000, 1), "timestamp": time.strftime("%H:%M:%S")}
 
 
-def compute_camera_alignment_views(img1_bgr, depth1_u16, intr1, scale1,
-                                   img2_bgr, depth2_u16, intr2, scale2,
-                                   T_matrix, alpha=0.5):
-    """
-    Reproyecta la Cámara 2 sobre la perspectiva de la Cámara 1 usando la matriz de calibración T(2->1).
-    Genera vistas para que el alineado se aprecie directamente en el entorno de las cámaras:
-    1. Overlay fusionado (Cam 1 + Cam 2 reproyectada al 50% de opacidad).
-    2. Anaglifo estéreo 3D (Cam 1 en Rojo, Cam 2 en Cian).
-    3. Vista lado a lado con líneas de nivel horizontal epipolares.
-    """
-    h1, w1 = img1_bgr.shape[:2]
-    h2, w2 = img2_bgr.shape[:2]
+def compute_camera_alignment_views(view1, view2, T_matrix, alpha=0.5, title="POSE"):
+    """Reproyecta Cam 2 en la imagen de color de Cam 1 con T(2->1) (marcos de profundidad):
+    fusión 2D, anaglifo (rojo Cam 1 / cian Cam 2) y nivel epipolar lado a lado."""
+    img1, img2 = view1.color, view2.color
+    ci1, ci2 = view1.cintr, view2.cintr
+    h1, w1 = img1.shape[:2]
 
-    T = np.asarray(T_matrix, dtype=np.float64)
-    R = T[:3, :3]
-    t = T[:3, 3].reshape(3, 1)
+    P2 = deproject(view2.depth_m(), view2.depth_intr, 0.3, 4.0)          # marco profundidad Cam 2
+    # color de cada punto: proyectarlo en la imagen de color de Cam 2
+    Pc2 = transform(view2.E, P2)
+    u2 = np.round(Pc2[:, 0] / Pc2[:, 2] * ci2["fx"] + ci2["ppx"]).astype(np.int64)
+    v2 = np.round(Pc2[:, 1] / Pc2[:, 2] * ci2["fy"] + ci2["ppy"]).astype(np.int64)
+    ok = (u2 >= 0) & (u2 < img2.shape[1]) & (v2 >= 0) & (v2 < img2.shape[0])
+    P2, u2, v2 = P2[ok], u2[ok], v2[ok]
+    # a la imagen de color de Cam 1
+    Pc1 = transform(view1.E @ np.asarray(T_matrix, np.float64), P2)
+    z = Pc1[:, 2]
+    front = z > 0.1
+    u1 = np.round(Pc1[front, 0] / z[front] * ci1["fx"] + ci1["ppx"]).astype(np.int64)
+    v1 = np.round(Pc1[front, 1] / z[front] * ci1["fy"] + ci1["ppy"]).astype(np.int64)
+    zf, u2f, v2f = z[front], u2[front], v2[front]
+    inb = (u1 >= 0) & (u1 < w1) & (v1 >= 0) & (v1 < h1)
+    order = np.argsort(-zf[inb])  # z-buffer: el más cercano se escribe el último
+    uu, vv = u1[inb][order], v1[inb][order]
+    warped = np.zeros_like(img1)
+    mask = np.zeros((h1, w1), np.uint8)
+    warped[vv, uu] = img2[v2f[inb][order], u2f[inb][order]]
+    mask[vv, uu] = 255
+    k = np.ones((3, 3), np.uint8)
+    warped, mask = cv2.dilate(warped, k), cv2.dilate(mask, k)
 
-    # Nube 3D densa de Cam 2
-    u2 = np.arange(w2)
-    v2 = np.arange(h2)
-    uu2, vv2 = np.meshgrid(u2, v2)
-    z2 = depth2_u16.astype(np.float64) * scale2
-    valid2 = (z2 > 0.3) & (z2 < 2.5)
-
-    z_vals = z2[valid2]
-    x_vals = (uu2[valid2] - intr2["ppx"]) / intr2["fx"] * z_vals
-    y_vals = (vv2[valid2] - intr2["ppy"]) / intr2["fy"] * z_vals
-
-    pts2 = np.vstack((x_vals, y_vals, z_vals))
-    pts1 = R @ pts2 + t
-
-    z1 = pts1[2, :]
-    valid1 = z1 > 0.1
-
-    u1 = np.round(pts1[0, valid1] / z1[valid1] * intr1["fx"] + intr1["ppx"]).astype(int)
-    v1 = np.round(pts1[1, valid1] / z1[valid1] * intr1["fy"] + intr1["ppy"]).astype(int)
-
-    in_bounds = (u1 >= 0) & (u1 < w1) & (v1 >= 0) & (v1 < h1)
-
-    u1_in = u1[in_bounds]
-    v1_in = v1[in_bounds]
-    colors2 = img2_bgr[vv2[valid2][valid1][in_bounds], uu2[valid2][valid1][in_bounds]]
-
-    # Canvas de Cam 2 reproyectada
-    warped_cam2 = np.zeros_like(img1_bgr)
-    mask_cam2 = np.zeros((h1, w1), dtype=np.uint8)
-
-    warped_cam2[v1_in, u1_in] = colors2
-    mask_cam2[v1_in, u1_in] = 255
-
-    kernel = np.ones((3, 3), np.uint8)
-    warped_cam2 = cv2.dilate(warped_cam2, kernel, iterations=1)
-    mask_cam2 = cv2.dilate(mask_cam2, kernel, iterations=1)
-
-    # 1. Overlay Blend con Cam 1
-    overlay = img1_bgr.copy()
-    overlap_mask = mask_cam2 > 0
-    overlay[overlap_mask] = cv2.addWeighted(
-        img1_bgr[overlap_mask], 1.0 - alpha,
-        warped_cam2[overlap_mask], alpha, 0
-    )
-
-    decomp = matrix_to_euler_translation(T)
-    tx = decomp["translation_cm"]["x"]
-    yaw = decomp["rotation_deg"]["yaw"]
+    overlay = img1.copy()
+    m = mask > 0
+    overlay[m] = cv2.addWeighted(img1[m], 1.0 - alpha, warped[m], alpha, 0)
+    d = matrix_to_euler_translation(T_matrix)
     cv2.rectangle(overlay, (0, 0), (w1, 36), (15, 23, 42), -1)
-    cv2.putText(overlay, f"FUSION 2D EN PERSPECTIVA: Tx={tx:+.1f}cm, Yaw={yaw:+.1f}deg (CAM1 + CAM2)",
+    cv2.putText(overlay, f"FUSION 2D ({title}): Tx={d['translation_cm']['x']:+.1f}cm Yaw={d['rotation_deg']['yaw']:+.1f}deg",
                 (14, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 200), 1, cv2.LINE_AA)
 
-    # 2. Anaglifo 3D Estéreo
-    anaglyph = np.zeros_like(img1_bgr)
-    anaglyph[:, :, 2] = img1_bgr[:, :, 2]
-    anaglyph[:, :, 0] = warped_cam2[:, :, 0]
-    anaglyph[:, :, 1] = warped_cam2[:, :, 1]
+    anaglyph = np.zeros_like(img1)
+    anaglyph[:, :, 2] = img1[:, :, 2]
+    anaglyph[:, :, 0] = warped[:, :, 0]
+    anaglyph[:, :, 1] = warped[:, :, 1]
     cv2.rectangle(anaglyph, (0, 0), (w1, 36), (15, 23, 42), -1)
-    cv2.putText(anaglyph, "ANAGLIFO 3D ESTEREO (ROJO: CAM 1, CIAN: CAM 2 FUSIONADA)",
-                (14, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 1, cv2.LINE_AA)
+    cv2.putText(anaglyph, f"ANAGLIFO ({title}): ROJO CAM 1, CIAN CAM 2", (14, 24),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 1, cv2.LINE_AA)
 
-    # 3. Vista Epipolar con líneas horizontales
-    epipolar = np.hstack([img1_bgr, img2_bgr])
-    eh, ew = epipolar.shape[:2]
-    for y_line in range(40, eh, 45):
-        cv2.line(epipolar, (0, y_line), (ew, y_line), (0, 255, 255), 1, cv2.LINE_AA)
-        cv2.circle(epipolar, (10, y_line), 3, (0, 255, 255), -1)
-
-    cv2.rectangle(epipolar, (0, 0), (ew, 32), (18, 18, 24), -1)
-    cv2.putText(epipolar, "NIVEL EPIPOLAR HORIZONTAL (LINEAS GUIA DE ALTURA ENTRE CAM 1 Y CAM 2)",
-                (18, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1, cv2.LINE_AA)
-
+    img2r = cv2.resize(img2, (int(img2.shape[1] * h1 / img2.shape[0]), h1))
+    epipolar = np.hstack([img1, img2r])
+    for y in range(40, h1, 45):
+        cv2.line(epipolar, (0, y), (epipolar.shape[1], y), (0, 255, 255), 1, cv2.LINE_AA)
+    cv2.rectangle(epipolar, (0, 0), (epipolar.shape[1], 32), (18, 18, 24), -1)
+    cv2.putText(epipolar, "NIVEL HORIZONTAL (GUIA DE ALTURAS ENTRE CAM 1 Y CAM 2)", (18, 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1, cv2.LINE_AA)
     return overlay, anaglyph, epipolar
 
 
-# Instancias globales
+# Estado global
 receiver = LiveCameraReceiver()
-alineador = AlineadorVirtual()
 captures_store = []
 active_capture_id = None
 latest_alignment_result = {}
@@ -265,33 +230,91 @@ capture_counter = 0
 
 
 # ==========================================
-# RUTAS DE PROXY PARA EL VISOR 3D (SAME ORIGIN)
+# Comunicación con 5002
+# ==========================================
+async def live3d_get(path, timeout=1.5):
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(LIVE3D + path, timeout=aiohttp.ClientTimeout(total=timeout)) as r:
+                return await r.json() if r.status == 200 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def live3d_set_extrinsics(matrix_4x4, calibration):
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(LIVE3D + "/api/dual/extrinsics", json={"matrix_4x4": matrix_4x4,
+                                                                     "calibration": calibration},
+                              timeout=aiohttp.ClientTimeout(total=3)) as r:
+                data = await r.json()
+                return r.status == 200 and data.get("status") == "success", data.get("message")
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+
+
+async def current_calibration():
+    """(matriz, info) de la calibración vigente en 5002, o (None, None)."""
+    dual = await live3d_get("/api/dual/status")
+    if not dual or not dual.get("is_dual"):
+        return None, None
+    return dual.get("extrinsics"), dual.get("calibration") or {}
+
+
+def system_state(live, dual):
+    """Resumen veraz para la cabecera del estudio."""
+    ages = receiver.cam_ages()
+    if live is None:
+        return {"state": "offline", "label": "Servidor 5002 caído",
+                "detail": "Arranca el servidor Live 3D (python app.py).", "can_capture": False}
+    cam = live.get("camera", {})
+    simulated = bool(cam.get("simulated"))
+    if not (dual or {}).get("is_dual"):
+        return {"state": "error", "label": "5002 no está en modo dual", "simulated": simulated,
+                "detail": cam.get("message", ""), "can_capture": False}
+    if cam.get("state") in ("no_device", "error", "starting", "stopped"):
+        return {"state": "error" if cam.get("state") != "starting" else "starting",
+                "label": {"no_device": "Cámaras no conectadas", "starting": "Abriendo cámaras..."}.get(
+                    cam.get("state"), "Error de cámaras"),
+                "detail": cam.get("message", ""), "simulated": simulated, "can_capture": False}
+    frozen = [i for i in (0, 1) if ages.get(i) is None or ages[i] > STALE_S]
+    if frozen:
+        return {"state": "stale", "simulated": simulated,
+                "label": "Sin cuadros de " + " y ".join(f"Cam {i + 1}" for i in frozen),
+                "detail": receiver.last_error or "El estudio no recibe cuadros nuevos del stream.",
+                "can_capture": False}
+    if cam.get("state") == "degraded":
+        return {"state": "degraded", "label": "Solo 1 cámara en vivo", "detail": cam.get("message", ""),
+                "simulated": simulated, "can_capture": False}
+    if simulated:
+        return {"state": "simulated", "label": "Simulación (sin cámaras)", "simulated": True,
+                "detail": "No hay RealSense conectadas: las tomas son sintéticas. En cuanto conectes las "
+                          "cámaras, 5002 cambiará a ellas automáticamente.", "can_capture": True}
+    return {"state": "live", "label": "2 cámaras en vivo", "detail": cam.get("message", ""),
+            "simulated": False, "can_capture": True}
+
+
+def _capture_summary(c):
+    keys = ("id", "title", "timestamp", "preview_url", "matches_url", "overlay_url", "anaglyph_url",
+            "epipolar_url", "aligned", "fitness_pct", "rmse_mm", "quality", "dt_ms", "simulated")
+    return {k: c.get(k) for k in keys}
+
+
+# ==========================================
+# VISOR 3D EMBEBIDO (mismo origen)
 # ==========================================
 async def handle_viewer3d(request):
-    """Sirve el visor 3D Three.js en el mismo origen (puerto 5005) para control directo de Three.js."""
-    try:
-        index_file = os.path.join(LIVE3D_WEB_DIR, "index.html")
-        with open(index_file, "r", encoding="utf-8") as f:
-            html = f.read()
-        return web.Response(text=html, content_type="text/html")
-    except Exception as e:
-        return web.Response(text=f"Error cargando visor 3D: {e}", status=502)
+    with open(os.path.join(LIVE3D_WEB_DIR, "index.html"), "r", encoding="utf-8") as f:
+        return web.Response(text=f.read(), content_type="text/html")
 
 
 async def handle_assets_main_js(request):
-    """Entrega main.js conectando websocket a 5002 y exponiendo window.viewer para 60 FPS."""
-    try:
-        main_js_file = os.path.join(LIVE3D_WEB_DIR, "js", "main.js")
-        with open(main_js_file, "r", encoding="utf-8") as f:
-            js = f.read()
-
-        js = js.replace('const wsUrl = `${proto}//${location.host}/ws`;',
-                        'const wsUrl = "ws://localhost:5002/ws";')
-
-        js = js.replace("fetch('/api/", "fetch('http://localhost:5002/api/")
-        js = js.replace('fetch("/api/', 'fetch("http://localhost:5002/api/')
-
-        js += """
+    """main.js del visor apuntando a 5002 y exponiendo window.viewer para los sliders."""
+    with open(os.path.join(LIVE3D_WEB_DIR, "js", "main.js"), "r", encoding="utf-8") as f:
+        js = f.read()
+    js = js.replace('const wsUrl = `${proto}//${location.host}/ws`;', f'const wsUrl = "{LIVE3D.replace("http", "ws", 1)}/ws";')
+    js = js.replace("fetch('/api/", f"fetch('{LIVE3D}/api/").replace('fetch("/api/', f'fetch("{LIVE3D}/api/')
+    js += """
 window.viewer = viewer;
 window.updateSlidersFromEuler = updateSlidersFromEuler;
 window.addEventListener('message', (e) => {
@@ -303,436 +326,260 @@ window.addEventListener('message', (e) => {
     }
 });
 """
-        return web.Response(text=js, content_type="application/javascript")
-    except Exception as e:
-        return web.Response(text=f"// Error: {e}", status=500)
+    return web.Response(text=js, content_type="application/javascript")
 
 
 # ==========================================
-# API DE ESTADO Y CAPTURA
+# API
 # ==========================================
 async def api_status(request):
-    """Verifica estado de servidores, cámaras en vivo y capturas realizadas."""
-    is_live_ok = False
-    extrinsics_current = None
-    try:
-        req = urllib.request.Request("http://localhost:5002/api/status")
-        with urllib.request.urlopen(req, timeout=1.0) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            is_live_ok = data.get("type") == "status" or "camera" in data
-
-        req_ext = urllib.request.Request("http://localhost:5002/api/dual/extrinsics")
-        with urllib.request.urlopen(req_ext, timeout=1.0) as resp_ext:
-            ext_data = json.loads(resp_ext.read().decode("utf-8"))
-            extrinsics_current = ext_data.get("components")
-    except Exception:
-        pass
-
-    captures_summary = [
-        {
-            "id": c["id"],
-            "title": c["title"],
-            "timestamp": c["timestamp"],
-            "preview_url": c["preview_url"],
-            "matches_url": c.get("matches_url"),
-            "overlay_url": c.get("overlay_url"),
-            "anaglyph_url": c.get("anaglyph_url"),
-            "epipolar_url": c.get("epipolar_url"),
-            "aligned": c.get("aligned", False),
-            "fitness_pct": c.get("fitness_pct", 0),
-            "rmse_mm": c.get("rmse_mm", 0)
-        }
-        for c in captures_store
-    ]
-
+    live, dual = await asyncio.gather(live3d_get("/api/status"), live3d_get("/api/dual/status"))
+    pose, calib = None, None
+    if dual and dual.get("is_dual"):
+        pose = matrix_to_euler_translation(dual["extrinsics"])
+        calib = dual.get("calibration")
     return web.json_response({
         "status": "ok",
-        "live3d_online": is_live_ok,
-        "receiver_fps": round(receiver.fps, 1),
-        "has_live_feed": receiver.latest_preview_jpeg is not None,
-        "current_pose": extrinsics_current,
+        "live3d_online": live is not None,
+        "system": system_state(live, dual),
+        "cams": (dual or {}).get("cams", []),
+        "receiver": {"connected": receiver.connected, "fps": round(receiver.fps, 1),
+                     "frame_age_s": {f"cam{i + 1}": a for i, a in receiver.cam_ages().items()}},
+        "current_pose": pose,
+        "calibration": calib,
         "captures_count": len(captures_store),
         "active_capture_id": active_capture_id,
-        "captures": captures_summary,
+        "captures": [_capture_summary(c) for c in captures_store],
         "has_last_alignment": bool(latest_alignment_result),
-        "latest_alignment": latest_alignment_result
+        "latest_alignment": latest_alignment_result,
     })
 
 
 async def api_live_stream(request):
-    """Stream de video MJPEG de ambas cámaras en vivo side-by-side."""
-    response = web.StreamResponse(
-        status=200,
-        reason='OK',
-        headers={
-            'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache',
-            'Expires': '0'
-        }
-    )
+    response = web.StreamResponse(headers={
+        "Content-Type": "multipart/x-mixed-replace; boundary=frame",
+        "Cache-Control": "no-cache, no-store, must-revalidate"})
     await response.prepare(request)
     try:
         while True:
-            jpeg_data = receiver.latest_preview_jpeg
-            if jpeg_data:
-                await response.write(
-                    b'--frame\r\n'
-                    b'Content-Type: image/jpeg\r\n\r\n' + jpeg_data + b'\r\n'
-                )
+            jpeg = receiver.preview_jpeg()
+            await response.write(b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n")
             await asyncio.sleep(0.066)
-    except (ConnectionResetError, asyncio.CancelledError, Exception):
+    except (ConnectionResetError, asyncio.CancelledError):
         pass
     return response
 
 
 async def api_live_frame(request):
-    """Retorna un único cuadro JPEG actual del stream en vivo."""
-    jpeg_data = receiver.latest_preview_jpeg
-    if not jpeg_data:
-        dummy = np.zeros((320, 800, 3), dtype=np.uint8)
-        cv2.putText(dummy, "Conectando al stream de camaras...", (180, 160),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
-        _, buf = cv2.imencode('.jpg', dummy)
-        jpeg_data = buf.tobytes()
-
-    return web.Response(body=jpeg_data, content_type='image/jpeg')
+    return web.Response(body=receiver.preview_jpeg(), content_type="image/jpeg")
 
 
 async def api_capture(request):
-    """Toma una nueva captura instantánea de ambas cámaras y la agrega a la galería."""
+    """Congela una toma emparejada de ambas cámaras (rechaza si alguna no está en vivo)."""
     global capture_counter, active_capture_id
-    pair = receiver.get_instant_pair()
-    if pair is None:
-        return web.json_response({
-            "status": "error",
-            "message": "Las cámaras aún no han enviado cuadros sincronizados. Espera 1 segundo."
-        }, status=503)
+    live = await live3d_get("/api/status")
+    try:
+        pair = receiver.get_instant_pair()
+    except PairUnavailable as e:
+        return web.json_response({"status": "error", "message": f"No se puede tomar la captura: {e}"}, status=409)
+    if live and live.get("camera", {}).get("state") == "degraded":
+        return web.json_response({"status": "error", "message": "Solo una cámara está en vivo: "
+                                  + live["camera"].get("message", "")}, status=409)
+    simulated = bool((live or {}).get("camera", {}).get("simulated"))
 
     capture_counter += 1
     cid = capture_counter
-    ts_str = time.strftime("%H:%M:%S")
-    title = f"Toma #{cid}"
+    v1, v2 = pair["views"]
+    img2r = cv2.resize(v2.color, (int(v2.color.shape[1] * v1.color.shape[0] / v2.color.shape[0]), v1.color.shape[0]))
+    preview = np.hstack([v1.color, img2r])
+    h1 = v1.color.shape[0]
+    cv2.rectangle(preview, (0, h1 - 30), (preview.shape[1], h1), (20, 20, 28), -1)
+    cv2.putText(preview, f"TOMA #{cid} {pair['timestamp']} | dt {pair['dt_ms']} ms" + (" | SIMULADA" if simulated else ""),
+                (12, h1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 230, 255), 1, cv2.LINE_AA)
+    fn = f"capture_{cid}_preview.jpg"
+    cv2.imwrite(os.path.join(CAPTURES_DIR, fn), preview)
 
-    img1 = pair["img1"]
-    img2 = pair["img2"]
-
-    h1, w1 = img1.shape[:2]
-    preview_comb = np.hstack([img1, img2])
-
-    pw = preview_comb.shape[1]
-    cv2.rectangle(preview_comb, (0, h1 - 42), (pw, h1), (20, 20, 28), -1)
-    cv2.putText(preview_comb, f"CAPTURA #{cid} · {ts_str} | CAM 1 (MASTER) y CAM 2 (SLAVE)",
-                (20, h1 - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 230, 255), 2, cv2.LINE_AA)
-
-    preview_filename = f"capture_{cid}_preview.jpg"
-    preview_disk_path = os.path.join(CAPTURES_DIR, preview_filename)
-    cv2.imwrite(preview_disk_path, preview_comb)
-
-    record = {
-        "id": cid,
-        "title": title,
-        "timestamp": ts_str,
-        "preview_url": f"/captures/{preview_filename}?t={int(time.time()*1000)}",
-        "matches_url": None,
-        "overlay_url": None,
-        "anaglyph_url": None,
-        "epipolar_url": None,
-        "aligned": False,
-        "fitness_pct": 0,
-        "rmse_mm": 0,
-        "pair_data": pair
-    }
-
+    record = {"id": cid, "title": f"Toma #{cid}", "timestamp": pair["timestamp"],
+              "preview_url": f"/captures/{fn}?t={int(time.time() * 1000)}", "aligned": False,
+              "fitness_pct": 0, "rmse_mm": 0, "quality": None, "dt_ms": pair["dt_ms"], "simulated": simulated,
+              "pair_data": pair}
     captures_store.insert(0, record)
     active_capture_id = cid
-
-    if len(captures_store) > 15:
+    while len(captures_store) > MAX_CAPTURES:
         old = captures_store.pop()
-        for suffix in ["preview", "matches", "overlay", "anaglyph", "epipolar"]:
-            old_path = os.path.join(CAPTURES_DIR, f"capture_{old['id']}_{suffix}.jpg")
-            if os.path.exists(old_path):
-                try:
-                    os.remove(old_path)
-                except Exception:
-                    pass
+        _remove_capture_files(old["id"])
+    return web.json_response({"status": "success",
+                              "message": f"Toma #{cid} capturada (Δt {pair['dt_ms']} ms entre cámaras)"
+                                         + (" · simulada" if simulated else ""),
+                              "capture": _capture_summary(record), "active_capture_id": cid,
+                              "total_captures": len(captures_store)})
 
-    print(f"[Captura] Nueva Toma #{cid} guardada con éxito a las {ts_str}")
 
-    return web.json_response({
-        "status": "success",
-        "message": f"¡Toma #{cid} capturada con éxito!",
-        "capture": {
-            "id": record["id"],
-            "title": record["title"],
-            "timestamp": record["timestamp"],
-            "preview_url": record["preview_url"],
-            "aligned": False
-        },
-        "active_capture_id": active_capture_id,
-        "total_captures": len(captures_store)
-    })
+def _remove_capture_files(cid):
+    for suffix in ("preview", "matches", "overlay", "anaglyph", "epipolar"):
+        p = os.path.join(CAPTURES_DIR, f"capture_{cid}_{suffix}.jpg")
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+def _find_capture(cid):
+    return next((c for c in captures_store if c["id"] == cid), None)
 
 
 async def api_align(request):
-    """Ejecuta la Alineación Virtual y genera las vistas de Fusión 2D Superpuesta en las cámaras."""
+    """Alinea la toma activa con el motor único. Aplica en 5002 solo si el resultado es fiable."""
     global latest_alignment_result, active_capture_id
-    try:
-        data = {}
-        if request.can_read_body:
-            try:
-                data = await request.json()
-            except Exception:
-                pass
+    data = {}
+    if request.can_read_body:
+        try:
+            data = await request.json()
+        except ValueError:
+            pass
+    rec = _find_capture(int(data["capture_id"])) if data.get("capture_id") is not None else _find_capture(active_capture_id)
+    if rec is None:
+        resp = await api_capture(request)
+        if resp.status != 200:
+            return resp
+        rec = captures_store[0]
+    active_capture_id = rec["id"]
+    v1, v2 = rec["pair_data"]["views"]
 
-        target_id = data.get("capture_id")
-        target_rec = None
+    prior, calib = await current_calibration()
+    if prior is not None and not (calib or {}).get("is_calibrated"):
+        prior = None
+    loop = asyncio.get_running_loop()
+    res = await loop.run_in_executor(None, align_pair, v1, v2, prior)
 
-        if target_id is not None:
-            for c in captures_store:
-                if c["id"] == int(target_id):
-                    target_rec = c
-                    break
-        elif active_capture_id is not None:
-            for c in captures_store:
-                if c["id"] == active_capture_id:
-                    target_rec = c
-                    break
+    cid, now_ts = rec["id"], int(time.time() * 1000)
+    urls = {}
+    matches_fn = f"capture_{cid}_matches.jpg"
+    cv2.imwrite(os.path.join(CAPTURES_DIR, matches_fn), draw_matches(v1, v2, res))
+    urls["matches_url"] = f"/captures/{matches_fn}?t={now_ts}"
 
-        if target_rec is None:
-            pair = receiver.get_instant_pair()
-            if pair is None:
-                return web.json_response({
-                    "status": "error",
-                    "message": "No hay capturas disponibles. Toma una foto primero."
-                }, status=400)
-            await api_capture(request)
-            target_rec = captures_store[0]
+    # Vistas de verificación: con la pose nueva si es fiable; si no, con la calibración vigente
+    view_T, view_title = (res["matrix_4x4"], "NUEVA") if res["success"] else (prior, "VIGENTE")
+    if view_T is not None:
+        imgs = await loop.run_in_executor(None, compute_camera_alignment_views, v1, v2, view_T, 0.5, view_title)
+        for name, img in zip(("overlay", "anaglyph", "epipolar"), imgs):
+            fn = f"capture_{cid}_{name}.jpg"
+            cv2.imwrite(os.path.join(CAPTURES_DIR, fn), img)
+            urls[f"{name}_url"] = f"/captures/{fn}?t={now_ts}"
+        rec["view_T"] = view_T
 
-        active_capture_id = target_rec["id"]
-        pair = target_rec["pair_data"]
+    metrics = res.get("metrics", {})
+    rec.update(urls)
+    rec["quality"] = res.get("quality")
+    out = public_result(res)
+    out.update(urls)
+    out["fitness_pct"] = metrics.get("consistency_pct", 0)
+    out["rmse_mm"] = metrics.get("rmse_mm")
+    out["capture_id"] = cid
+    out["timestamp"] = time.strftime("%H:%M:%S")
+    if not res["success"]:
+        out["status"] = "warning"
+        return web.json_response(out)
 
-        initial_guess = None
-        if latest_alignment_result and "matrix_4x4" in latest_alignment_result:
-            initial_guess = latest_alignment_result["matrix_4x4"]
-
-        t0 = time.time()
-        res = alineador.align(
-            img1_bgr=pair["img1"], depth1_u16=pair["depth1"], intr1=pair["intr1"],
-            img2_bgr=pair["img2"], depth2_u16=pair["depth2"], intr2=pair["intr2"],
-            scale1=pair["scale1"], scale2=pair["scale2"],
-            initial_guess=initial_guess
-        )
-        t_total = int((time.time() - t0) * 1000)
-
-        if not res["success"]:
-            return web.json_response({
-                "status": "error",
-                "message": res["message"]
-            }, status=400)
-
-        cid = target_rec["id"]
-        now_ts = int(time.time() * 1000)
-
-        # 1. Guardar imagen diagnóstica con correspondencias 3D
-        matches_fn = f"capture_{cid}_matches.jpg"
-        cv2.imwrite(os.path.join(CAPTURES_DIR, matches_fn), res["debug_image"])
-        cv2.imwrite(os.path.join(STATIC_DIR, "latest_matches.jpg"), res["debug_image"])
-        matches_url = f"/captures/{matches_fn}?t={now_ts}"
-
-        # 2. Generar Vistas de Fusión 2D Superpuesta en las Cámaras
-        overlay_img, anaglyph_img, epipolar_img = compute_camera_alignment_views(
-            img1_bgr=pair["img1"], depth1_u16=pair["depth1"], intr1=pair["intr1"], scale1=pair["scale1"],
-            img2_bgr=pair["img2"], depth2_u16=pair["depth2"], intr2=pair["intr2"], scale2=pair["scale2"],
-            T_matrix=res["matrix_4x4"], alpha=0.5
-        )
-
-        overlay_fn = f"capture_{cid}_overlay.jpg"
-        anaglyph_fn = f"capture_{cid}_anaglyph.jpg"
-        epipolar_fn = f"capture_{cid}_epipolar.jpg"
-
-        cv2.imwrite(os.path.join(CAPTURES_DIR, overlay_fn), overlay_img)
-        cv2.imwrite(os.path.join(CAPTURES_DIR, anaglyph_fn), anaglyph_img)
-        cv2.imwrite(os.path.join(CAPTURES_DIR, epipolar_fn), epipolar_img)
-
-        overlay_url = f"/captures/{overlay_fn}?t={now_ts}"
-        anaglyph_url = f"/captures/{anaglyph_fn}?t={now_ts}"
-        epipolar_url = f"/captures/{epipolar_fn}?t={now_ts}"
-
-        # Actualizar registro de la captura
-        target_rec["aligned"] = True
-        target_rec["matches_url"] = matches_url
-        target_rec["overlay_url"] = overlay_url
-        target_rec["anaglyph_url"] = anaglyph_url
-        target_rec["epipolar_url"] = epipolar_url
-        target_rec["fitness_pct"] = res["fitness_pct"]
-        target_rec["rmse_mm"] = res["rmse_mm"]
-        target_rec["matrix_4x4"] = res["matrix_4x4"]
-        target_rec["components"] = res["components"]
-
-        # Aplicar en caliente al visor 3D Three.js
-        apply_extrinsics_to_live_viewer(res["matrix_4x4"])
-
-        latest_alignment_result = {
-            "status": "success",
-            "capture_id": cid,
-            "timestamp": time.strftime("%H:%M:%S"),
-            "total_time_ms": res.get("total_time_ms", t_total),
-            "fitness_pct": res["fitness_pct"],
-            "rmse_mm": res["rmse_mm"],
-            "components": res["components"],
-            "matrix_4x4": res["matrix_4x4"],
-            "matches_url": matches_url,
-            "overlay_url": overlay_url,
-            "anaglyph_url": anaglyph_url,
-            "epipolar_url": epipolar_url,
-            "image_url": overlay_url
-        }
-
-        return web.json_response(latest_alignment_result)
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return web.json_response({"status": "error", "message": str(e)}, status=500)
+    calibration = {"method": res["method"], "quality": res["quality"], "source": "estudio",
+                   "consistency_pct": metrics.get("consistency_pct"), "rmse_mm": metrics.get("rmse_mm"),
+                   "overlap_points": metrics.get("overlap_points"), "dt_ms": metrics.get("dt_ms"),
+                   "feature_inliers": metrics.get("inliers"), "simulated": rec.get("simulated", False)}
+    applied, msg = await live3d_set_extrinsics(res["matrix_4x4"], calibration)
+    rec.update(aligned=True, fitness_pct=out["fitness_pct"], rmse_mm=out["rmse_mm"],
+               matrix_4x4=res["matrix_4x4"], components=res["components"])
+    out["status"] = "success"
+    out["applied"] = applied
+    if not applied:
+        out["warnings"] = out.get("warnings", []) + [f"No se pudo guardar en 5002: {msg}"]
+    latest_alignment_result = {k: out.get(k) for k in (
+        "status", "capture_id", "timestamp", "total_time_ms", "fitness_pct", "rmse_mm", "quality",
+        "components", "matrix_4x4", "matches_url", "overlay_url", "anaglyph_url", "epipolar_url")}
+    return web.json_response(out)
 
 
 async def api_reproject(request):
-    """Re-genera la fusión 2D en perspectiva con una opacidad alpha específica."""
-    try:
-        data = await request.json()
-        cid = int(data.get("capture_id", active_capture_id or 1))
-        alpha = float(data.get("alpha", 0.5))
-
-        target_rec = None
-        for c in captures_store:
-            if c["id"] == cid:
-                target_rec = c
-                break
-
-        if not target_rec or "matrix_4x4" not in target_rec:
-            return web.json_response({"status": "error", "message": "Captura sin alineación previa"}, status=400)
-
-        pair = target_rec["pair_data"]
-        overlay_img, _, _ = compute_camera_alignment_views(
-            pair["img1"], pair["depth1"], pair["intr1"], pair["scale1"],
-            pair["img2"], pair["depth2"], pair["intr2"], pair["scale2"],
-            target_rec["matrix_4x4"], alpha=alpha
-        )
-
-        overlay_fn = f"capture_{cid}_overlay.jpg"
-        cv2.imwrite(os.path.join(CAPTURES_DIR, overlay_fn), overlay_img)
-        now_ts = int(time.time() * 1000)
-
-        return web.json_response({
-            "status": "success",
-            "overlay_url": f"/captures/{overlay_fn}?t={now_ts}"
-        })
-    except Exception as e:
-        return web.json_response({"status": "error", "message": str(e)}, status=400)
+    data = await request.json()
+    rec = _find_capture(int(data.get("capture_id", active_capture_id or 0)))
+    if not rec or rec.get("view_T") is None:
+        return web.json_response({"status": "error", "message": "Toma sin vistas de alineación"}, status=400)
+    v1, v2 = rec["pair_data"]["views"]
+    loop = asyncio.get_running_loop()
+    overlay, _, _ = await loop.run_in_executor(None, compute_camera_alignment_views, v1, v2, rec["view_T"],
+                                               float(data.get("alpha", 0.5)), "AJUSTE")
+    fn = f"capture_{rec['id']}_overlay.jpg"
+    cv2.imwrite(os.path.join(CAPTURES_DIR, fn), overlay)
+    return web.json_response({"status": "success", "overlay_url": f"/captures/{fn}?t={int(time.time() * 1000)}"})
 
 
 async def api_select_capture(request):
-    """Selecciona qué captura visualizar en el visor."""
     global active_capture_id
-    try:
-        data = await request.json()
-        cid = int(data.get("id"))
-        for c in captures_store:
-            if c["id"] == cid:
-                active_capture_id = cid
-                return web.json_response({
-                    "status": "success",
-                    "active_capture_id": cid,
-                    "capture": {
-                        "id": c["id"],
-                        "title": c["title"],
-                        "timestamp": c["timestamp"],
-                        "preview_url": c["preview_url"],
-                        "matches_url": c.get("matches_url"),
-                        "overlay_url": c.get("overlay_url"),
-                        "anaglyph_url": c.get("anaglyph_url"),
-                        "epipolar_url": c.get("epipolar_url"),
-                        "aligned": c.get("aligned", False),
-                        "fitness_pct": c.get("fitness_pct", 0),
-                        "rmse_mm": c.get("rmse_mm", 0)
-                    }
-                })
+    data = await request.json()
+    rec = _find_capture(int(data.get("id")))
+    if not rec:
         return web.json_response({"status": "error", "message": "Captura no encontrada."}, status=404)
-    except Exception as e:
-        return web.json_response({"status": "error", "message": str(e)}, status=400)
+    active_capture_id = rec["id"]
+    return web.json_response({"status": "success", "active_capture_id": rec["id"], "capture": _capture_summary(rec)})
 
 
 async def api_delete_capture(request):
-    """Elimina una captura del historial."""
     global active_capture_id
-    try:
-        data = await request.json()
-        cid = int(data.get("id"))
-        idx = -1
-        for i, c in enumerate(captures_store):
-            if c["id"] == cid:
-                idx = i
-                break
-        if idx >= 0:
-            captures_store.pop(idx)
-            for suffix in ["preview", "matches", "overlay", "anaglyph", "epipolar"]:
-                p = os.path.join(CAPTURES_DIR, f"capture_{cid}_{suffix}.jpg")
-                if os.path.exists(p):
-                    try:
-                        os.remove(p)
-                    except Exception:
-                        pass
-            if active_capture_id == cid:
-                active_capture_id = captures_store[0]["id"] if captures_store else None
-            return web.json_response({
-                "status": "success",
-                "active_capture_id": active_capture_id,
-                "remaining_count": len(captures_store)
-            })
+    data = await request.json()
+    rec = _find_capture(int(data.get("id")))
+    if not rec:
         return web.json_response({"status": "error", "message": "No encontrada."}, status=404)
-    except Exception as e:
-        return web.json_response({"status": "error", "message": str(e)}, status=400)
+    captures_store.remove(rec)
+    _remove_capture_files(rec["id"])
+    if active_capture_id == rec["id"]:
+        active_capture_id = captures_store[0]["id"] if captures_store else None
+    return web.json_response({"status": "success", "active_capture_id": active_capture_id,
+                              "remaining_count": len(captures_store)})
+
+
+def _pose_from_body(data):
+    keys = ("tx", "ty", "tz", "yaw", "pitch", "roll")
+    missing = [k for k in keys if k not in data]
+    if missing:
+        raise ValueError(f"faltan {', '.join(missing)}")
+    return euler_translation_to_matrix(*(float(data[k]) for k in keys))
 
 
 async def api_set_manual(request):
-    """Permite ajustar manualmente la pose mediante sliders a 60 FPS."""
-    global latest_alignment_result
+    """Pose de los sliders -> matriz para previsualizar en el visor. NO se guarda."""
     try:
-        data = await request.json()
-        tx = float(data.get("tx", -60.0))
-        ty = float(data.get("ty", 2.0))
-        tz = float(data.get("tz", 20.0))
-        yaw = float(data.get("yaw", 45.0))
-        pitch = float(data.get("pitch", 0.0))
-        roll = float(data.get("roll", 0.0))
-
-        T = euler_translation_to_matrix(tx, ty, tz, yaw, pitch, roll)
-        apply_extrinsics_to_live_viewer(T.tolist())
-
-        decomp = matrix_to_euler_translation(T)
-        latest_alignment_result["matrix_4x4"] = T.tolist()
-        latest_alignment_result["components"] = decomp
-
-        return web.json_response({
-            "status": "success",
-            "components": decomp,
-            "matrix_4x4": T.tolist()
-        })
-    except Exception as e:
+        T = _pose_from_body(await request.json())
+    except (ValueError, TypeError) as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)
+    rec = _find_capture(active_capture_id)
+    if rec is not None:
+        rec["view_T"] = T.tolist()  # la fusión 2D de la toma activa refleja el ajuste
+    return web.json_response({"status": "success", "components": matrix_to_euler_translation(T),
+                              "matrix_4x4": T.tolist()})
+
+
+async def api_save_pose(request):
+    """Guarda en 5002 la pose de los sliders (acción explícita del usuario)."""
+    try:
+        T = _pose_from_body(await request.json())
+    except (ValueError, TypeError) as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=400)
+    ok, msg = await live3d_set_extrinsics(T.tolist(), {"method": "ajuste manual (estudio)", "source": "estudio"})
+    if not ok:
+        return web.json_response({"status": "error", "message": f"No se pudo guardar en 5002: {msg}"}, status=502)
+    return web.json_response({"status": "success", "message": "Pose manual guardada como calibración vigente."})
 
 
 async def api_apply(request):
-    """Re-aplica la última pose calculada al visor Live 3D."""
-    if not latest_alignment_result or "matrix_4x4" not in latest_alignment_result:
-        return web.json_response({"status": "error", "message": "No hay alineación previa para aplicar."}, status=400)
-
-    ok = apply_extrinsics_to_live_viewer(latest_alignment_result["matrix_4x4"])
+    """Re-aplica en 5002 la última alineación fiable."""
+    if not latest_alignment_result.get("matrix_4x4"):
+        return web.json_response({"status": "error", "message": "No hay alineación fiable para aplicar."}, status=400)
+    ok, msg = await live3d_set_extrinsics(latest_alignment_result["matrix_4x4"],
+                                          {"method": "re-aplicada desde el estudio", "source": "estudio",
+                                           "quality": latest_alignment_result.get("quality")})
     if ok:
-        return web.json_response({"status": "success", "message": "¡Alineación aplicada exitosamente en el visor 3D!"})
-    else:
-        return web.json_response({"status": "error", "message": "No se pudo comunicar con el puerto 5002."}, status=502)
+        return web.json_response({"status": "success", "message": "Alineación aplicada en el visor 3D."})
+    return web.json_response({"status": "error", "message": f"No se pudo comunicar con 5002: {msg}"}, status=502)
 
 
 async def handle_index(request):
@@ -745,27 +592,27 @@ async def on_startup(app):
 
 async def on_cleanup(app):
     receiver.running = False
-    if "receiver_task" in app:
-        app["receiver_task"].cancel()
-        try:
-            await app["receiver_task"]
-        except (asyncio.CancelledError, Exception):
-            pass
+    app["receiver_task"].cancel()
+    try:
+        await app["receiver_task"]
+    except (asyncio.CancelledError, Exception):  # noqa: BLE001
+        pass
+
+
+@web.middleware
+async def no_cache(request, handler):
+    resp = await handler(request)
+    resp.headers["Cache-Control"] = "no-cache"  # la UI cambia con el código: nunca servir una versión vieja
+    return resp
 
 
 def create_app():
-    os.makedirs(STATIC_DIR, exist_ok=True)
-    os.makedirs(CAPTURES_DIR, exist_ok=True)
-
-    app = web.Application()
+    app = web.Application(middlewares=[no_cache])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
-
-    # 3D Viewport Proxy (Mismo origen)
     app.router.add_get("/viewer3d", handle_viewer3d)
     app.router.add_get("/assets/js/main.js", handle_assets_main_js)
     app.router.add_static("/assets", LIVE3D_WEB_DIR)
-
     app.router.add_get("/", handle_index)
     app.router.add_get("/api/status", api_status)
     app.router.add_get("/api/live_stream", api_live_stream)
@@ -777,8 +624,8 @@ def create_app():
     app.router.add_post("/api/captures/select", api_select_capture)
     app.router.add_post("/api/captures/delete", api_delete_capture)
     app.router.add_post("/api/set_manual", api_set_manual)
+    app.router.add_post("/api/save_pose", api_save_pose)
     app.router.add_post("/api/apply", api_apply)
-
     app.router.add_static("/captures", CAPTURES_DIR)
     app.router.add_static("/", STATIC_DIR)
     return app
@@ -786,11 +633,6 @@ def create_app():
 
 if __name__ == "__main__":
     print("=" * 70)
-    print("  SERVIDOR DE PRUEBA: ALINEACIÓN VIRTUAL Y ESTUDIO DUAL")
-    print("  Puerto: 5005 (Totalmente Independiente)")
+    print("  ESTUDIO DE CALIBRACIÓN DUAL · http://localhost:5005 (cliente de 5002)")
     print("=" * 70)
-    print("  Abre tu navegador en: http://localhost:5005")
-    print("=" * 70)
-
-    app = create_app()
-    web.run_app(app, host="0.0.0.0", port=PORT)
+    web.run_app(create_app(), host="0.0.0.0", port=PORT)

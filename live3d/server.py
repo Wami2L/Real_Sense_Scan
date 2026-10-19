@@ -329,33 +329,81 @@ async def api_capture(request):
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 
-async def api_reload_camera(request):
-    app = request.app
+def connected_serials():
+    try:
+        import pyrealsense2 as rs
+        return [d.get_info(rs.camera_info.serial_number) for d in rs.context().query_devices()
+                if d.supports(rs.camera_info.serial_number)]
+    except Exception:  # noqa: BLE001  (sin pyrealsense2 o sin driver)
+        return []
+
+
+def choose_source(single=False):
+    """Elige la fuente según lo conectado. Devuelve (clase, mensaje, es_respaldo_sintético).
+
+    Con 2 cámaras configuradas en config/dual_camera_config.json basta con que UNA esté
+    conectada para arrancar en modo dual: la que falta se muestra como 'no conectada' en vez
+    de cambiar silenciosamente de modo.
+    """
+    found = connected_serials()
+    configured = []
+    try:
+        from .capture import DUAL_CONFIG_PATH
+        with open(DUAL_CONFIG_PATH, encoding="utf-8") as f:
+            configured = [c["serial"] for c in json.load(f).get("cameras", []) if c.get("serial")]
+    except (OSError, ValueError):
+        pass
+    if not single and (len(found) >= 2 or (len(configured) >= 2 and set(found) & set(configured))):
+        missing = [s for s in configured[:2] if s not in found]
+        msg = f"Modo dual ({len(found)} RealSense conectadas)" + (f"; falta {', '.join(missing)}" if missing else "")
+        return DualRealSenseSource, msg, False
+    if found:
+        return RealSenseSource, f"Modo cámara única ({found[0]})", False
+    if single:
+        return SyntheticSource, "Sin cámaras físicas: simulación de 1 cámara", True
+    return SyntheticDualSource, "Sin cámaras físicas: simulación de 2 cámaras", True
+
+
+async def switch_source(app, cls, message, fallback):
     loop = asyncio.get_running_loop()
     hub = app["hub"]
-    store = app["store"]
     old_src = app.get("source")
     if old_src:
         await loop.run_in_executor(None, old_src.stop)
-
-    cls = SyntheticDualSource
-    msg = "Sin cámaras físicas detectadas. Modo sintético dual activo"
-    try:
-        import pyrealsense2 as rs
-        devs = list(rs.context().query_devices())
-        if len(devs) >= 2:
-            cls = DualRealSenseSource
-            msg = f"Iniciando en modo Dual ({len(devs)} cámaras físicas detectadas)"
-        elif len(devs) == 1:
-            cls = RealSenseSource
-            msg = "Iniciando en modo cámara única"
-    except Exception as e:
-        msg = f"Error detectando cámaras ({e}). Modo sintético dual activo"
-
-    new_src = cls(store, make_frame_handler(hub, loop), has_demand=lambda: bool(hub.variants))
+    new_src = cls(app["store"], make_frame_handler(hub, loop), has_demand=lambda: bool(hub.variants))
     app["source"] = new_src
+    app["source_fallback"] = fallback
+    for c in hub.clients:  # los meta_id pueden repetirse entre fuentes: forzar reenvío del meta
+        c.meta_sent = {}
     new_src.start()
-    return web.json_response({"status": "success", "message": msg, "source": new_src.name})
+    print(f"[Live3D] Fuente: {new_src.name} · {message}", flush=True)
+    hub.broadcast({"type": "source_changed", "source": new_src.name, "message": message,
+                   "simulated": bool(getattr(new_src, "simulated", False))})
+    return new_src
+
+
+async def device_watch_task(app, period=3.0):
+    """Si se arrancó en simulación por falta de cámaras, pasa a las reales en cuanto se conectan."""
+    loop = asyncio.get_running_loop()
+    while True:
+        await asyncio.sleep(period)
+        if not app.get("source_fallback"):
+            continue
+        found = await loop.run_in_executor(None, connected_serials)
+        if found:
+            await asyncio.sleep(2.0)  # dar tiempo a que enumere la segunda cámara
+            cls, msg, fallback = await loop.run_in_executor(None, choose_source, app["args_single"])
+            if not fallback:
+                await switch_source(app, cls, "Cámara detectada: " + msg, fallback)
+
+
+async def api_reload_camera(request):
+    app = request.app
+    loop = asyncio.get_running_loop()
+    cls, msg, fallback = await loop.run_in_executor(None, choose_source, app["args_single"])
+    new_src = await switch_source(app, cls, msg, fallback)
+    return web.json_response({"status": "success", "message": msg, "source": new_src.name,
+                              "simulated": bool(getattr(new_src, "simulated", False))})
 
 
 # ----------------- MULTI-CAPTURA -----------------
@@ -489,16 +537,18 @@ async def api_list_saves(_request):
 # ----------------- DUAL CAMERA -----------------
 async def api_dual_status(request):
     src = request.app.get("source")
-    if hasattr(src, "serials"):
+    if hasattr(src, "cameras_status"):
         return web.json_response({
             "is_dual": True,
+            "simulated": src.simulated,
             "cameras": src.serials,
+            "cams": src.cameras_status(),
             "active_index": src._active_cam_idx,
             "view": src.view_mode,
-            "stats": src._cam_stats,
-            "extrinsics": src.get_extrinsics().tolist()
+            "extrinsics": src.get_extrinsics().tolist(),
+            "calibration": src.calibration_info(),
         })
-    return web.json_response({"is_dual": False})
+    return web.json_response({"is_dual": False, "simulated": bool(getattr(src, "simulated", False))})
 
 
 async def api_dual_select(request):
@@ -552,18 +602,14 @@ async def api_dual_calibrate(request):
         if not snap1 or not snap2:
             return web.json_response({"status": "error", "message": "No se pudieron obtener cuadros sincronizados"}, status=500)
         
-        from tools.calibrate_dual import calibrate_from_images, save_extrinsics_to_config
+        from tools.calibrate_dual import calibrate_from_images
         
         T_matrix, rmse_px, dbg1, dbg2 = calibrate_from_images(
             snap1["color"], snap2["color"], snap1["intrinsics"], snap2["intrinsics"]
         )
         
-        save_extrinsics_to_config(T_matrix, rmse_px, config_path=src.config_path)
-        if hasattr(src, "config"):
-            src.config["extrinsics_cam2_to_cam1"]["matrix_4x4"] = T_matrix.tolist()
-            src.config["extrinsics_cam2_to_cam1"]["is_calibrated"] = True
-            src.config["extrinsics_cam2_to_cam1"]["rmse_px"] = rmse_px
-            
+        src.set_extrinsics(T_matrix, method="ChArUco", rmse_px=float(rmse_px), source="charuco")
+
         return web.json_response({
             "status": "success",
             "message": f"Calibración exitosa (Error reproyección: {rmse_px} px)",
@@ -575,52 +621,40 @@ async def api_dual_calibrate(request):
 
 
 async def api_dual_auto_align(request):
-    """Calcula alineación ICP multiescala automática entre Cam 1 y Cam 2 sin necesidad de tablero."""
+    """Alineación automática Cam 2 -> Cam 1 (fotogrametría RGB-D + ICP, live3d/alignment.py)
+    sobre un snapshot nativo emparejado (no sobre el stream comprimido). Solo se guarda si el
+    motor la considera fiable; si no, se conserva la calibración vigente."""
     src = request.app.get("source")
-    if not hasattr(src, "get_snapshot") or not hasattr(src, "serials") or len(src.serials) < 2:
+    if not hasattr(src, "cameras_status"):
         return web.json_response({"status": "error", "message": "Se requieren 2 cámaras activas para auto-alinear"}, status=400)
+    not_live = [c for c in src.cameras_status() if c["state"] != "streaming"]
+    if not_live:
+        msg = "; ".join(f"Cam {c['idx'] + 1}: {c['message']}" for c in not_live)
+        return web.json_response({"status": "error", "message": f"Ambas cámaras deben estar en vivo ({msg})"}, status=409)
 
     loop = asyncio.get_running_loop()
     try:
         dual_snap = await loop.run_in_executor(None, src.get_snapshot, 6.0)
-        snap1 = dual_snap.get("cam1")
-        snap2 = dual_snap.get("cam2")
-        if not snap1 or not snap2:
-            return web.json_response({"status": "error", "message": "No se pudieron obtener cuadros sincronizados"}, status=500)
-
-        from .registration import snap_to_pcd, register_dual_point_clouds, matrix_to_euler_translation
-
-        def run_reg():
-            pcd1 = snap_to_pcd(snap1)
-            pcd2 = snap_to_pcd(snap2)
-            init_T = src.get_extrinsics() if hasattr(src, "get_extrinsics") else None
-            return register_dual_point_clouds(pcd1, pcd2, init_T=init_T)
-
-        res = await loop.run_in_executor(None, run_reg)
-        mat = res["matrix_4x4"]
-
-        if res["success"] and hasattr(src, "config"):
-            src.config.setdefault("extrinsics_cam2_to_cam1", {})
-            src.config["extrinsics_cam2_to_cam1"]["matrix_4x4"] = mat
-            src.config["extrinsics_cam2_to_cam1"]["is_calibrated"] = True
-            src.config["extrinsics_cam2_to_cam1"]["method"] = res.get("method")
-            src.config["extrinsics_cam2_to_cam1"]["fitness"] = res["fitness"]
-            src.config["extrinsics_cam2_to_cam1"]["rmse_mm"] = res["inlier_rmse_mm"]
-            src.config["extrinsics_cam2_to_cam1"]["calibration_date"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            if hasattr(src, "config_path") and os.path.isfile(src.config_path):
-                with open(src.config_path, "w", encoding="utf-8") as f:
-                    json.dump(src.config, f, indent=4)
-
-        decomp = matrix_to_euler_translation(mat)
-        return web.json_response({
-            "status": "success" if res["success"] else "warning",
-            "message": res["message"],
-            "fitness": res["fitness"],
-            "rmse_mm": res["inlier_rmse_mm"],
-            "matrix_4x4": mat,
-            "components": decomp
-        })
-    except Exception as e:
+        from .alignment import RGBDView, align_pair, public_result
+        v1 = RGBDView.from_snapshot(dual_snap["cam1"], "Cam 1")
+        v2 = RGBDView.from_snapshot(dual_snap["cam2"], "Cam 2")
+        prior = src.get_extrinsics() if src.calibration_info().get("is_calibrated") else None
+        res = await loop.run_in_executor(None, align_pair, v1, v2, prior)
+        out = public_result(res)
+        out["simulated"] = src.simulated
+        if res["success"]:
+            m = res["metrics"]
+            src.set_extrinsics(res["matrix_4x4"], method=res["method"], quality=res["quality"],
+                               consistency_pct=m["consistency_pct"], rmse_mm=m["rmse_mm"],
+                               overlap_points=m["overlap_points"], dt_ms=m["dt_ms"],
+                               feature_inliers=m.get("inliers"), source="auto_align")
+            out["status"] = "success"
+            out["fitness"] = m["consistency_pct"] / 100.0   # compatibilidad con el visor
+            out["rmse_mm"] = m["rmse_mm"]
+        else:
+            out["status"] = "warning"
+        return web.json_response(out)
+    except Exception as e:  # noqa: BLE001
         import traceback
         traceback.print_exc()
         return web.json_response({"status": "error", "message": str(e)}, status=400)
@@ -638,7 +672,11 @@ async def api_get_extrinsics(request):
 
 
 async def api_set_extrinsics(request):
+    """Body: {"matrix_4x4": [[...]]} o {"components": {...}}; opcional "calibration": {método y
+    métricas} para dejar constancia de cómo se obtuvo."""
     src = request.app.get("source")
+    if not hasattr(src, "set_extrinsics"):
+        return web.json_response({"status": "error", "message": "No está en modo dual"}, status=400)
     try:
         data = await request.json()
         mat = data.get("matrix_4x4")
@@ -651,25 +689,31 @@ async def api_set_extrinsics(request):
                 t.get("x", 0.0), t.get("y", 0.0), t.get("z", 0.0),
                 r.get("yaw", 0.0), r.get("pitch", 0.0), r.get("roll", 0.0)
             ).tolist()
+        if not mat:
+            raise ValueError("falta matrix_4x4 o components")
+        info = {"method": "ajuste manual", **(data.get("calibration") or {})}
+        entry = src.set_extrinsics(mat, **info)
+        return web.json_response({"status": "success", "message": "Extrínsecas actualizadas",
+                                  "matrix_4x4": entry["matrix_4x4"], "persisted": bool(src.config_path)})
+    except (ValueError, TypeError) as e:
+        return web.json_response({"status": "error", "message": f"Matriz inválida: {e}"}, status=400)
 
-        if mat and len(mat) == 4 and len(mat[0]) == 4:
-            if hasattr(src, "config"):
-                src.config.setdefault("extrinsics_cam2_to_cam1", {})
-                src.config["extrinsics_cam2_to_cam1"]["matrix_4x4"] = mat
-                src.config["extrinsics_cam2_to_cam1"]["is_calibrated"] = True
-                if hasattr(src, "config_path") and os.path.isfile(src.config_path):
-                    with open(src.config_path, "w", encoding="utf-8") as f:
-                        json.dump(src.config, f, indent=4)
-            return web.json_response({"status": "success", "message": "Extrínsecas actualizadas", "matrix_4x4": mat})
-    except Exception as e:
-        return web.json_response({"status": "error", "message": str(e)}, status=400)
-    return web.json_response({"status": "error", "message": "Matriz 4x4 o componentes inválidos"}, status=400)
+
+STUDIO_ORIGINS = {"http://localhost:5005", "http://127.0.0.1:5005"}
 
 
 @web.middleware
 async def no_cache(request, handler):
-    resp = await handler(request)
+    origin = request.headers.get("Origin")
+    if request.method == "OPTIONS" and origin in STUDIO_ORIGINS:
+        resp = web.Response(status=204)
+    else:
+        resp = await handler(request)
     resp.headers["Cache-Control"] = "no-cache"
+    if origin in STUDIO_ORIGINS:  # el estudio de calibración (5005) consulta esta API
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return resp
 
 
@@ -684,35 +728,15 @@ def build_app(args):
     app["multi_lock"] = asyncio.Lock()
 
     async def on_startup(app):
-        loop = asyncio.get_running_loop()
+        app["args_single"] = bool(getattr(args, "single", False))
         if args.synthetic:
             cls = SyntheticDualSource if getattr(args, "dual", False) else SyntheticSource
+            msg, fallback = "Simulación forzada (--synthetic)", False
         else:
-            try:
-                import pyrealsense2 as rs
-                devs = list(rs.context().query_devices())
-                if len(devs) >= 2 and not getattr(args, "single", False):
-                    cls = DualRealSenseSource
-                    print(f"[Live3D] Detectadas {len(devs)} cámaras RealSense. Iniciando en modo DUAL...", flush=True)
-                elif len(devs) == 1:
-                    cls = RealSenseSource
-                    s_id = devs[0].get_info(rs.camera_info.serial_number) if devs[0].supports(rs.camera_info.serial_number) else "OK"
-                    print(f"[Live3D] Detectada 1 cámara RealSense ({s_id}). Iniciando en modo simple...", flush=True)
-                else:
-                    if getattr(args, "single", False):
-                        cls = SyntheticSource
-                        print("[Live3D] Sin cámaras físicas conectadas. Activando modo Sintético Simple (--single)...", flush=True)
-                    else:
-                        cls = SyntheticDualSource
-                        print("[Live3D] Sin cámaras físicas conectadas. Activando modo Sintético Dual (2 cámaras simuladas)...", flush=True)
-            except Exception as e:
-                print(f"[Live3D] Detección multi-cámara ({e}). Usando fuente sintética dual de respaldo.", flush=True)
-                cls = SyntheticDualSource
-
-        src = cls(store, make_frame_handler(hub, loop), has_demand=lambda: bool(hub.variants))
-        app["source"] = src
-        src.start()
+            cls, msg, fallback = choose_source(app["args_single"])
+        await switch_source(app, cls, msg, fallback)
         app["status_task"] = asyncio.create_task(status_task(app))
+        app["watch_task"] = asyncio.create_task(device_watch_task(app))
 
     async def on_shutdown(app):
         for c in list(hub.clients):
@@ -720,6 +744,7 @@ def build_app(args):
 
     async def on_cleanup(app):
         app["status_task"].cancel()
+        app["watch_task"].cancel()
         await asyncio.get_running_loop().run_in_executor(None, app["source"].stop)
 
     app.on_startup.append(on_startup)

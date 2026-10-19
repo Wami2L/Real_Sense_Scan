@@ -38,14 +38,14 @@ export class LiveStream {
     this.metas = {};      // meta_id -> meta (uno por cámara en modo dual)
     this.ws = null;
     this.paused = false;
-    this.handlers = { meta: [], status: [], frame: [], state: [], error: [] };
+    this.handlers = { meta: [], status: [], frame: [], state: [], error: [], source_changed: [] };
     this._retry = 0;
     this._lastSeq = [-1, -1];
     this.bytes = 0;
   }
 
-  on(ev, fn) { this.handlers[ev].push(fn); return this; }
-  _emit(ev, x) { for (const fn of this.handlers[ev]) fn(x); }
+  on(ev, fn) { (this.handlers[ev] ||= []).push(fn); return this; }
+  _emit(ev, x) { for (const fn of this.handlers[ev] || []) fn(x); }
 
   connect() {
     this._emit('state', 'connecting');
@@ -95,6 +95,7 @@ export class LiveStream {
     if (msg.type === 'meta') { this.meta = msg; this.metas[msg.meta_id] = msg; this._emit('meta', msg); }
     else if (msg.type === 'status') this._emit('status', msg);
     else if (msg.type === 'error') this._emit('error', msg.message);
+    else if (msg.type === 'source_changed') this._emit('source_changed', msg);
   }
 
   async _onBinary(buf) {

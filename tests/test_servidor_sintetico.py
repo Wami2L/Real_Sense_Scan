@@ -131,3 +131,40 @@ def test_captura_dual_genera_archivos(server):
         parent = os.path.dirname(folder)
         if os.path.isdir(parent) and not os.listdir(parent):
             os.rmdir(parent)
+
+
+def test_status_marca_la_simulacion_y_cada_camara(server):
+    _, body = run(_get(server, "/api/status"))
+    cam = body["camera"]
+    assert cam["simulated"] is True
+    assert [c["state"] for c in cam["cams"]] == ["streaming", "streaming"]
+
+
+def test_auto_align_recupera_la_verdad_sintetica(server):
+    import numpy as np
+    from live3d.alignment import pose_delta
+    status, body = run(_post(server, "/api/dual/auto_align", {}))
+    assert status == 200 and body["status"] == "success", body
+    gt = np.eye(4)
+    gt[0, 3] = 0.25
+    assert pose_delta(gt, body["matrix_4x4"])["translation_cm"] < 1.0
+    _, dual = run(_get(server, "/api/dual/status"))
+    assert dual["calibration"]["persisted"] is False   # la simulación no toca config/ en disco
+    assert dual["calibration"]["quality"] == "buena"
+
+
+def test_extrinsecas_invalidas_se_rechazan(server):
+    status, body = run(_post(server, "/api/dual/extrinsics", {"matrix_4x4": [[2, 0, 0, 0], [0, 1, 0, 0],
+                                                                            [0, 0, 1, 0], [0, 0, 0, 1]]}))
+    assert status == 400 and body["status"] == "error"
+
+
+def test_cors_permite_al_estudio(server):
+    async def preflight():
+        async with aiohttp.ClientSession() as s:
+            async with s.options(server + "/api/dual/extrinsics",
+                                 headers={"Origin": "http://localhost:5005",
+                                          "Access-Control-Request-Method": "POST"}) as r:
+                return r.status, r.headers.get("Access-Control-Allow-Origin")
+    status, origin = run(preflight())
+    assert status == 204 and origin == "http://localhost:5005"

@@ -2,7 +2,7 @@
 
 > **Rama:** `Pre_Produccion`
 > **Fecha:** 2026-10-19
-> **Estado:** Propuesta — diagnóstico hecho leyendo el código; ninguna cifra de rendimiento se ha medido todavía en hardware (la Fase 0 existe justamente para medirlas).
+> **Estado:** En curso — Fase 0 hecha salvo mover el código legado (línea base sintética y con hardware medidas); iteración 2 (§6) implementada y probada con las dos D455. Fases 1–6 pendientes.
 
 ---
 
@@ -104,7 +104,7 @@ Cada fase debe quedar funcionando en `--synthetic --dual` **y** en hardware ante
 **Estado (2026-10-19):** benchmark y tests de humo hechos. Falta la línea base con hardware y mover el código legado.
 
 - `python tools/bench_live3d.py [--spawn] [--capture] [--json archivo]`
-- `python -m pytest`: 22 tests pasan y 1 `xfail` (C12). Hay que instalar `requirements-dev.txt`.
+- `python -m pytest`: hay que instalar `requirements-dev.txt`. Recuento actual en §6.2.
 
 Línea base **sintética** (`--spawn`, 10 s, zlib+JPEG, misma máquina). Sirve para medir regresiones de código, no el rendimiento del hardware:
 
@@ -119,7 +119,18 @@ Línea base **sintética** (`--spawn`, 10 s, zlib+JPEG, misma máquina). Sirve p
 
 Notas: la fuente sintética está limitada por el trazado de rayos en numpy (no llega a 30 FPS). `camera_fps` del status (36.5) suma las dos cámaras porque `SyntheticDualSource` llama a `_tick_fps` en cada `_emit`. zlib nivel 1 solo comprime la profundidad unas 2:1.
 
-Línea base **con hardware** (pendiente): con `iniciar_sistema.bat` en marcha, ejecutar `python tools/bench_live3d.py --seconds 20 --capture --json bench_hw_antes.json` y copiar aquí la tabla.
+Línea base **con hardware** (2026-10-19, `python tools/bench_live3d.py --seconds 20 --capture`, 2× D455 por USB 3.2, 848×480@30, código de la iteración 2, un solo cliente WS):
+
+| Métrica | Cam 1 (master) | Cam 2 (slave) |
+|---|---|---|
+| FPS recibidos | 30.0 | 30.0 |
+| Mb/s | 52.6 | 45.0 |
+| KB/cuadro (depth / color) | 160.1 / 53.6 | 133.2 / 49.7 |
+| Latencia p50 / p95 | 8.0 / 11.3 ms | 7.4 / 10.3 ms |
+| Servidor | `proc_ms` 13.5 · `encode_ms` 7.4 · 0 descartes/s | |
+| Captura dual | 2.21 s (164 407 puntos; malla vía Poisson, por C12) | |
+
+Frente al modo sintético, cada cuadro real pesa ~2× (848×480 sin decimar, C2): ~98 Mb/s en total con un solo cliente. Esta es la referencia "antes" de la Fase 1.
 
 ### Fase 1 — Captura dual eficiente (mayor ganancia)
 - Extraer un `CameraWorker` reutilizable a partir de `RealSenseSource` (apertura con perfiles de respaldo, watchdog, `hardware_reset`, filtros según `Settings`). `DualRealSenseSource` pasa a ser N workers más la coordinación.
@@ -180,3 +191,68 @@ Línea base **con hardware** (pendiente): con `iniciar_sistema.bat` en marcha, e
 - El shader del visor espera depth→color de cada cámara. Al quitar `align` en dual (F1) hay que verificar la reproyección del color en las dos cámaras.
 - La regla de "un proceso por cámara" hace que F3 sea obligatoria si el estudio necesita snapshots nativos.
 - Open3D libera el GIL solo en parte: si la `JobQueue` en hilo degrada el stream, pasarla a `ProcessPoolExecutor`.
+
+---
+
+## 6. Iteración 2 — Estados veraces y alineación coherente con el sensor (2026-10-19)
+
+### 6.1 Hallazgos nuevos
+
+| # | Problema | Estado |
+|---|---|---|
+| N1 | El alineador del estudio (`calibrador.py`) tenía **la pose del montaje cableada** (Tx ∈ [-115, -15] cm, Yaw ∈ [15°, 80°] y una pose "base" fija). Cuando no encontraba nada válido devolvía esa pose fija con `success=True`. Cualquier otro montaje, incluida la simulación, "se alineaba" mal sin avisar. | Resuelto: motor nuevo |
+| N2 | Kabsch sobre **todos** los pares SIFT sin RANSAC (un solo outlier basta para arruinarlo). La profundidad se muestreaba con intrínsecas de color aunque no estuviera alineada al color. | Resuelto |
+| N3 | Escena sintética **incoherente entre cámaras**: la ondulación de la pared dependía del rayo de cada cámara, no del mundo, así que dos cámaras simuladas nunca podían alinearse. El snapshot sintético etiquetaba el color con intrínsecas que no le correspondían. | Resuelto |
+| N4 | Los sliders del estudio **guardaban en disco** en cada movimiento. Además, una fuente simulada podía sobrescribir `config/dual_camera_config.json` (incluidas las cámaras y sus seriales). | Resuelto |
+| N5 | El indicador del estudio decía siempre "Entorno 3D Activo", hubiera cámaras o no. El estado dual se marcaba `streaming` antes de que arrancara ninguna cámara y un worker caído no se reintentaba. | Resuelto |
+| N6 | El RANSAC de Open3D no tenía semilla: el mismo par daba poses distintas en cada ejecución. | Resuelto |
+| N7 | `test_cli.py` no arrancaba (constructor con argumentos inexistentes). `/api/align` bloqueaba el event loop y la vista previa MJPEG se recodificaba en cada cuadro (E2). | Resuelto |
+
+### 6.2 Qué se implementó
+
+- **`live3d/alignment.py`**: motor único para 5002 (`/api/dual/auto_align`) y 5005 (`/api/align`).
+  - Modelo de ruido del D455: σz = z²·σd / (f·b), con b = 95 mm, Min-Z 0,52 m y rango de calibración hasta 3 m. Todos los umbrales salen de σz.
+  - SIFT con CLAHE, ratio de Lowe y verificación mutua. La elevación a 3D respeta las extrínsecas depth→color y descarta los keypoints en bordes de profundidad. Después, RANSAC rígido y reajuste ponderado por 1/σ².
+  - Tres hipótesis: SIFT, calibración vigente y FPFH global. Cada una se refina con ICP point-to-plane con kernel de Tukey.
+  - Evaluación por **consistencia proyectiva**: cada punto se proyecta en la imagen de profundidad de la otra cámara y se comprueban la distancia (3σ), la violación de espacio libre y la orientación de la superficie (descarta soluciones espejo).
+  - Veredicto `buena` / `aceptable` / `insuficiente`. Si es insuficiente, **no se devuelve matriz** y se conserva la calibración vigente.
+  - Una pose que se aleja más de 5 cm o 5° de la calibración vigente solo se acepta con evidencia fuerte (calidad buena y fotogrametría coherente). Si no, pide confirmación.
+- **Estado por cámara** (`capture.py`): `_DualMixin` común a la fuente real y a la simulada.
+  - Estados `starting`, `streaming`, `stalled`, `error` y `no_device` por cámara, y agregado `degraded` cuando solo una está en vivo.
+  - Reconexión por cámara con `hardware_reset` tras fallos repetidos.
+  - Snapshot dual con Δt real (timestamp de hardware si ambos están en dominio global).
+  - No se alinea ni se copia un cuadro que nadie necesita.
+  - Guardado atómico de extrínsecas con validación de rotación y metadatos de cómo se obtuvieron.
+- **Servidor 5002**: selección de fuente centralizada (`choose_source`). **Vigilante de dispositivos**: si arrancó en simulación por falta de cámaras, cambia solo a las reales al conectarlas. CORS para el estudio. Mensaje `source_changed` al cliente.
+- **Estudio 5005**: estado real en la cabecera y en el aviso de sistema. Toma rechazada si una cámara está congelada o desincronizada. Alineación fuera del event loop. Sliders solo de previsualización, con Guardar y Restaurar explícitos.
+- **Tests**: 41 (39 pasan, 1 `xfail` por C12 y 1 que se omite si hay RealSense conectadas). Incluyen la recuperación de la verdad sintética con y sin semilla, el determinismo, los casos sin profundidad, desincronizados y sin relación (sin falsos positivos), el estado `no_device` sin hardware y el guardado atómico.
+
+### 6.3 Resultados con datos reales (escaneos duales del 2026-10-16)
+
+`python test_fotogrametria/test_cli.py --all-saves`, con la calibración usada en cada toma como semilla:
+
+- En 3 de 8 tomas el motor **confirma** la calibración vigente, con una diferencia de 1,0–1,5 cm y 0,9–1,8°.
+- Las otras 5 se **rechazan** con su motivo: sin solape, o pose contradictoria sin evidencia. Antes, una de ellas se habría aceptado con una pose a 2 m y 79° de la real.
+- **Sin semilla, ninguna toma real basta para calibrar desde cero.** Con el montaje a ~60–70° de convergencia hay muy pocos pares SIFT con profundidad (0–12 por toma), porque SIFT pierde invariancia a partir de ~30–40° de cambio de vista. Con una persona como escena, la geometría sola es ambigua.
+
+### 6.3 bis Prueba en vivo con las dos D455 (2026-10-19)
+
+- 5002 arranca en modo dual real, con las dos cámaras en `streaming` a 30 FPS y la calibración vigente (2026-10-16) cargada.
+- Estudio 5005: la cabecera muestra "2 cámaras en vivo" y la toma y la galería funcionan. La alineación (escena de aula, profundidad mediana 2,5 m) se **rechaza** con motivo: la calibración vigente solo es consistente al 12–40 % en esa escena y FPFH propone una pose a 1,7–3,2 m / ~176° de ella. `/api/dual/auto_align` (snapshot nativo) da el mismo veredicto. No se tocó `config/dual_camera_config.json`.
+- **N8 — Δt del snapshot dual falso (resuelto).** Con la Cam 2 fuera del dominio de tiempo global, el respaldo usaba `time.time()` tomado después de filtrar y copiar. En Python 3.12 sobre Windows ese reloj va a saltos de ~15,6 ms, así que `dt_ms` salía 0,0 / 15,6 aunque los cuadros estuvieran separados 30–60 ms. Ahora se usa `perf_counter()` justo después de `wait_for_frames`, y el resultado indica `dt_source` (`hardware (global_time)` / `llegada al host`), que también se guarda en `metadata_dual.json`. Medido después del arreglo: 15–41 ms.
+- La fuente dual real publica `profile` en el status (antes salía vacío en el visor y en el benchmark).
+
+### 6.4 Recomendaciones de operación (según el sensor)
+
+1. **Calibración inicial con ChArUco** (ya existe en 5002) y la alineación automática para verificar y refinar. Es lo único fiable para un montaje tan convergente.
+2. **Emisor IR de la Cam 2**: está apagado en la config (`emitter_enabled: false`). Así su profundidad depende de la textura ambiente o del patrón de la Cam 1. Intel documenta que varias D4xx no se degradan de forma apreciable entre sí. **Probar ambos encendidos** y comparar consistencia y RMSE con la misma escena antes de decidir.
+3. **Firmware**: igualar la Cam 2 (5.12) con la Cam 1 (5.17).
+4. Escena de calibración: objetos con volumen y textura única en la zona común, a 0,8–2,5 m, y quietos.
+5. **Metadatos de cuadro en Windows (Cam 2)**: la Cam 2 no entrega metadatos (`frame_counter` y `sensor_timestamp` no disponibles), así que sus cuadros llevan timestamps `system_time` en vez de `global_time`, aunque `global_time_enabled = 1`. Hay que instalar el registro de metadatos UVC para ese dispositivo con `scripts/realsense_metadata_win10.ps1` de librealsense (como administrador y con las cámaras conectadas). Mientras tanto, el Δt del snapshot se mide por la hora de llegada al host. Esto es un requisito previo de la Fase 2 (emparejamiento por timestamp de hardware).
+
+### 6.5 Pendiente
+
+- Reconexión de los workers (C3): con las dos D455 (2026-10-19) se verificaron el arranque, el estado por cámara (`streaming`, 30 FPS, USB 3.2, emisor) y el snapshot emparejado. **Falta desenchufar y volver a enchufar** una cámara con el sistema en marcha para comprobar `degraded` → recuperación (solo se puede hacer físicamente).
+- Emparejamiento del snapshot: hoy se toma el primer cuadro de cada cámara tras la petición, con Δt medido de 15–41 ms. Elegir el par con menor |Δt| de un buffer es la Fase 2.
+- Alineación multi-toma: acumular varias tomas emparejadas de una escena quieta para ganar solape.
+- El estudio sigue alineando sobre cuadros del stream (JPEG). El snapshot nativo emparejado ya existe en 5002 (`/api/dual/auto_align`), y la Fase 3 unificará ambos.

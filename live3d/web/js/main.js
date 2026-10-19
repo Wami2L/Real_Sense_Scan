@@ -120,6 +120,11 @@ stream.on('state', (state) => {
   }
 });
 
+stream.on('source_changed', (msg) => {
+  showToast(msg.message || 'Fuente de cámara cambiada');
+  checkDualCameraStatus();
+});
+
 stream.on('meta', (meta) => {
   currentMeta = meta;
   viewer.setMeta(meta);
@@ -168,6 +173,8 @@ stream.on('status', (msg) => {
     kvProfile.textContent = cam.profile || '–';
     kvProc.textContent = cam.proc_ms ? `${cam.proc_ms} ms` : '–';
 
+    const camsTxt = (cam.cams || []).map(c => `Cam ${c.idx + 1}: ${c.state === 'streaming' ? (c.fps || 0).toFixed(0) + ' FPS' : c.message}`).join(' · ');
+    if (camsTxt) deviceLabel.title = camsTxt;
     if (cam.state === 'no_device') {
       connPill.setAttribute('data-state', 'no_device');
       connText.textContent = 'Sin Cámara';
@@ -177,9 +184,14 @@ stream.on('status', (msg) => {
     } else if (cam.state === 'error') {
       connPill.setAttribute('data-state', 'error');
       connText.textContent = 'Error';
+    } else if (cam.state === 'degraded' && !stream.paused) {
+      connPill.setAttribute('data-state', 'starting');
+      connText.textContent = '1 de 2 cámaras';
+      connPill.title = cam.message || '';
     } else if (cam.state === 'streaming' && !stream.paused) {
-      connPill.setAttribute('data-state', 'live');
-      connText.textContent = 'En Vivo';
+      connPill.setAttribute('data-state', cam.simulated ? 'paused' : 'live');
+      connText.textContent = cam.simulated ? 'Simulación' : 'En Vivo';
+      connPill.title = cam.simulated ? 'Sin RealSense conectadas: escena sintética. Cambia sola a las cámaras al conectarlas.' : '';
     }
   }
 
@@ -896,7 +908,8 @@ if (btnAutoAlign) {
       const data = await res.json();
       if (!res.ok || data.status === 'error') throw new Error(data.message);
       if (data.status === 'warning') {
-        throw new Error(`${data.message}. No se aplicó: apunta ambas cámaras a una zona común con volumen (no una pared plana) y reintenta.`);
+        const why = (data.warnings || []).slice(0, 2).join(' ');
+        throw new Error(`${data.message}${why ? ' ' + why : ''}`);
       }
 
       const comp = data.components || data.euler_translation;
@@ -907,7 +920,7 @@ if (btnAutoAlign) {
         viewer.setExtrinsics(data.matrix_4x4);
       }
       if (calibStatusBadge) {
-        calibStatusBadge.textContent = `${Math.round(data.fitness * 100)}% Fit`;
+        calibStatusBadge.textContent = `${data.quality || ''} ${Math.round(data.fitness * 100)}%`;
       }
       showToast(`✓ ${data.message}`);
 

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Alineación Virtual · Dual RealSense Live 3D</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/style.css?v=2">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -49,9 +49,9 @@
     </div>
 
     <div class="header-right">
-      <div id="live-indicator" class="status-indicator online">
+      <div id="live-indicator" class="status-indicator" title="Comprobando estado...">
         <span class="dot"></span>
-        <span id="live-status-text">Entorno 3D Activo</span>
+        <span id="live-status-text">Comprobando...</span>
       </div>
       <a href="http://localhost:5002" target="_blank" class="btn-external" title="Abrir visor original en pestaña nueva">
         Puerto 5002 ↗
@@ -96,6 +96,9 @@
           </div>
         </button>
       </div>
+
+      <!-- Estado real del sistema (cámaras, simulación, servidor 5002) -->
+      <div id="system-banner" class="system-banner hidden"></div>
 
       <!-- Barra de Estado Dinámica -->
       <div id="status-banner" class="status-banner info">
@@ -169,7 +172,7 @@
       <!-- 4. Tarjetas de Métricas de Calidad -->
       <div class="metrics-row">
         <div class="metric-mini">
-          <span class="m-lbl">Solape (Fitness)</span>
+          <span class="m-lbl" title="Puntos comunes coherentes con lo que mide la otra cámara (proyección + espacio libre)">Consistencia</span>
           <span id="m-fitness" class="m-val highlight">-- %</span>
         </div>
         <div class="metric-mini">
@@ -186,7 +189,10 @@
       <div class="sliders-section">
         <div class="sliders-header">
           <span>Ajuste Manual Fino en Vivo</span>
-          <button id="btn-reset-pose" class="btn-tiny" title="Restaurar a calibración base física">Restaurar</button>
+          <span class="sliders-actions">
+            <button id="btn-reset-pose" class="btn-tiny" title="Volver a la calibración guardada en 5002">Restaurar</button>
+            <button id="btn-save-pose" class="btn-tiny" title="Guardar esta pose como calibración vigente">Guardar</button>
+          </span>
         </div>
 
         <!-- Traslación X -->
@@ -197,7 +203,7 @@
           </div>
           <div class="slider-controls">
             <button class="step-btn" data-axis="tx" data-delta="-2">-</button>
-            <input type="range" id="sl-tx" min="-110" max="0" step="0.5" value="-60">
+            <input type="range" id="sl-tx" min="-150" max="150" step="0.5" value="-60">
             <button class="step-btn" data-axis="tx" data-delta="2">+</button>
           </div>
         </div>
@@ -210,7 +216,7 @@
           </div>
           <div class="slider-controls">
             <button class="step-btn" data-axis="ty" data-delta="-1">-</button>
-            <input type="range" id="sl-ty" min="-30" max="30" step="0.5" value="2">
+            <input type="range" id="sl-ty" min="-60" max="60" step="0.5" value="2">
             <button class="step-btn" data-axis="ty" data-delta="1">+</button>
           </div>
         </div>
@@ -223,7 +229,7 @@
           </div>
           <div class="slider-controls">
             <button class="step-btn" data-axis="tz" data-delta="-2">-</button>
-            <input type="range" id="sl-tz" min="-30" max="60" step="0.5" value="20">
+            <input type="range" id="sl-tz" min="-100" max="150" step="0.5" value="20">
             <button class="step-btn" data-axis="tz" data-delta="2">+</button>
           </div>
         </div>
@@ -236,7 +242,7 @@
           </div>
           <div class="slider-controls">
             <button class="step-btn" data-axis="yaw" data-delta="-1">-</button>
-            <input type="range" id="sl-yaw" min="15" max="80" step="0.5" value="48">
+            <input type="range" id="sl-yaw" min="-90" max="90" step="0.5" value="48">
             <button class="step-btn" data-axis="yaw" data-delta="1">+</button>
           </div>
         </div>
@@ -249,7 +255,7 @@
           </div>
           <div class="slider-controls">
             <button class="step-btn" data-axis="pitch" data-delta="-1">-</button>
-            <input type="range" id="sl-pitch" min="-25" max="25" step="0.5" value="3">
+            <input type="range" id="sl-pitch" min="-45" max="45" step="0.5" value="3">
             <button class="step-btn" data-axis="pitch" data-delta="1">+</button>
           </div>
         </div>
@@ -262,7 +268,7 @@
           </div>
           <div class="slider-controls">
             <button class="step-btn" data-axis="roll" data-delta="-1">-</button>
-            <input type="range" id="sl-roll" min="-25" max="25" step="0.5" value="-4">
+            <input type="range" id="sl-roll" min="-45" max="45" step="0.5" value="-4">
             <button class="step-btn" data-axis="roll" data-delta="1">+</button>
           </div>
         </div>
@@ -271,6 +277,6 @@
     </aside>
   </main>
 
-  <script src="/app.js"></script>
+  <script src="/app.js?v=2"></script>
 </body>
 </html>

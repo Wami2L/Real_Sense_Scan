@@ -257,7 +257,9 @@ class BaseSource:
 
     def status(self):
         with self._lock:
-            return dict(self._status)
+            st = dict(self._status)
+        st["simulated"] = getattr(self, "simulated", False)
+        return st
 
     def _set_status(self, **kw):
         with self._lock:
@@ -305,6 +307,7 @@ class BaseSource:
 # --------------------------------------------------------------------------- #
 class RealSenseSource(BaseSource):
     name = "realsense"
+    simulated = False
     FALLBACK_PROFILES = [
         ((848, 480), (848, 480), 30),
         ((848, 480), (640, 480), 30),
@@ -613,6 +616,7 @@ class SyntheticSource(BaseSource):
     """Escena trazada por rayos con numpy: pared ondulada, suelo y dos esferas
     en movimiento. Simula FOV de la D455, ruido y desplazamiento depth->color."""
     name = "synthetic"
+    simulated = True
     DEPTH_HFOV = math.radians(87)
     COLOR_HFOV = math.radians(90)
     BASELINE = (-0.059, 0.0, 0.0)  # traslación depth -> color (m)
@@ -679,6 +683,20 @@ class SyntheticSource(BaseSource):
 
             self._stop.wait(max(0.0, period - (time.perf_counter() - tick)))
 
+    _NOISE = None
+
+    @classmethod
+    def _noise(cls, a, b):
+        """Ruido suave fijo (semilla 0) muestreado en coordenadas del mundo (m), valores 0..1."""
+        if cls._NOISE is None:
+            import cv2
+            rnd = np.random.default_rng(0).random((64, 64)).astype(np.float32)
+            cls._NOISE = cv2.resize(rnd, (512, 512), interpolation=cv2.INTER_CUBIC).clip(0, 1)
+        n = cls._NOISE
+        i = (np.nan_to_num(a) * 96).astype(np.int64) % n.shape[1]
+        j = (np.nan_to_num(b) * 96).astype(np.int64) % n.shape[0]
+        return n[j, i]
+
     @staticmethod
     def _intr(w, h, hfov):
         f = (w / 2) / math.tan(hfov / 2)
@@ -694,8 +712,10 @@ class SyntheticSource(BaseSource):
         zbest = np.full((h, w), INF, np.float32)
         mat = np.zeros((h, w), np.int8)
 
-        # Pared ondulada (z = 2.4 + onda)
-        zw = 2.4 + 0.06 * np.sin(gx * 2.4 * 6.0 + t * 1.5) * np.cos(gy * 2.4 * 5.0)
+        # Pared ondulada (z = 2.4 + onda). La onda se evalúa en coordenadas del MUNDO (donde el
+        # rayo corta el plano nominal), así todas las cámaras simuladas ven la misma pared.
+        xw, yw = ox + gx * (2.4 - oz), oy + gy * (2.4 - oz)
+        zw = 2.4 + 0.06 * np.sin(xw * 6.0 + t * 1.5) * np.cos(yw * 5.0)
         zw = zw - oz
         zbest = np.minimum(zbest, zw)
         mat[:] = 1
@@ -725,13 +745,16 @@ class SyntheticSource(BaseSource):
         X, Y = gx * zbest + ox, gy * zbest + oy
         Z = zbest + oz
         img = np.zeros((h, w, 3), np.float32)
-        # pared: damero cálido
+        # pared: damero cálido modulado por manchas no periódicas (pegadas al mundo, no a la
+        # imagen) para que la fotogrametría tenga texturas únicas como en una escena real
         chk = ((np.floor(X * 4) + np.floor(Y * 4)) % 2).astype(np.float32)
-        wall = np.stack([0.55 + 0.25 * chk, 0.42 + 0.15 * chk, 0.35 + 0.1 * chk], -1)
+        tex = SyntheticSource._noise(X, Y)[..., None]
+        wall = np.stack([0.55 + 0.25 * chk, 0.42 + 0.15 * chk, 0.35 + 0.1 * chk], -1) * (0.55 + 0.7 * tex)
         img[mat == 1] = wall[mat == 1]
         # suelo: rejilla
         grid = ((np.abs((X * 5) % 1 - 0.5) > 0.46) | (np.abs((Z * 5) % 1 - 0.5) > 0.46)).astype(np.float32)
-        floor = np.stack([0.15 + 0.5 * grid, 0.2 + 0.6 * grid, 0.28 + 0.7 * grid], -1)
+        floor = (np.stack([0.15 + 0.5 * grid, 0.2 + 0.6 * grid, 0.28 + 0.7 * grid], -1)
+                 * (0.6 + 0.6 * SyntheticSource._noise(X + 7.0, Z)[..., None]))
         img[mat == 2] = floor[mat == 2]
         # esferas: sombreado lambert
         for (cx, cy, cz), rad, mid in spheres:
@@ -746,40 +769,80 @@ class SyntheticSource(BaseSource):
 
 
 # --------------------------------------------------------------------------- #
-# Sintética Dual (Simulación de 2 cámaras en vivo con extrínsecas)
+# Calibración, modo de vista y estado por cámara compartidos por las fuentes duales
 # --------------------------------------------------------------------------- #
-class SyntheticDualSource(SyntheticSource):
-    name = "synthetic_dual"
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DUAL_CONFIG_PATH = os.path.join(ROOT_DIR, "config", "dual_camera_config.json")
 
-    def __init__(self, store, on_frame, has_demand=lambda: True, log=print):
-        super().__init__(store, on_frame, has_demand=has_demand, log=log)
-        self.serials = ["SIM-CAM1-0777", "SIM-CAM2-1709"]
-        self.view_mode = "dual"
+
+class _DualMixin:
+    """Extrínsecas T(cam2 -> cam1), modo de vista y estado por cámara.
+
+    config_path=None: la calibración vive solo en memoria (simulación). Así una fuente
+    simulada nunca sobrescribe la calibración real del disco.
+    """
+    simulated = False
+
+    def _init_dual(self, config_path, serials, roles=("master", "slave")):
+        self.config_path = config_path
+        self._config_lock = threading.Lock()
+        self.config = self._load_config()
+        self.serials = list(serials)
+        self.view_mode = "dual"       # 'dual': ambas cámaras; 'solo': solo la activa
         self._active_cam_idx = 0
-        self._emit_lock = threading.Lock()
-        self._cam_stats = {
-            self.serials[0]: {"fps": 30.0, "frames": 0, "t0": time.time(), "state": "streaming"},
-            self.serials[1]: {"fps": 30.0, "frames": 0, "t0": time.time(), "state": "streaming"},
-        }
-        self.config_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "dual_camera_config.json"
-        )
-        self.config = {
-            "extrinsics_cam2_to_cam1": {
-                "is_calibrated": True,
-                "matrix_4x4": [
-                    [1.0, 0.0, 0.0, 0.25],
-                    [0.0, 1.0, 0.0, 0.00],
-                    [0.0, 0.0, 1.0, 0.00],
-                    [0.0, 0.0, 0.0, 1.00]
-                ]
-            }
-        }
+        self._emit_lock = threading.Lock()  # _emit puede llamarse desde varios hilos
+        self._cams = {i: {"idx": i, "serial": s, "role": roles[i] if i < len(roles) else "slave",
+                          "state": "starting", "message": "Inicializando...", "fps": 0.0,
+                          "last_frame": None, "frames": 0}
+                      for i, s in enumerate(self.serials)}
+
+    # ---- configuración / extrínsecas ----
+    def _load_config(self):
+        if self.config_path and os.path.isfile(self.config_path):
+            try:
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:  # noqa: BLE001
+                self.log(f"[Dual] Error leyendo {self.config_path}: {e}")
+        return {"cameras": [], "extrinsics_cam2_to_cam1": {"is_calibrated": False,
+                                                           "matrix_4x4": np.eye(4).tolist()}}
 
     def get_extrinsics(self):
-        mat = self.config.get("extrinsics_cam2_to_cam1", {}).get("matrix_4x4")
-        return np.array(mat, dtype=np.float64)
+        with self._config_lock:
+            mat = self.config.get("extrinsics_cam2_to_cam1", {}).get("matrix_4x4")
+        return np.eye(4, dtype=np.float64) if mat is None else np.array(mat, dtype=np.float64)
 
+    def calibration_info(self):
+        """Metadatos de la calibración vigente (sin la matriz)."""
+        with self._config_lock:
+            ext = dict(self.config.get("extrinsics_cam2_to_cam1", {}))
+        ext.pop("matrix_4x4", None)
+        ext["persisted"] = bool(self.config_path)
+        return ext
+
+    def set_extrinsics(self, matrix_4x4, **info):
+        """Fija T(cam2 -> cam1) y la guarda de forma atómica. `info` (método, calidad, métricas)
+        sustituye a los metadatos de la calibración anterior para que no queden mezclados."""
+        T = np.asarray(matrix_4x4, dtype=np.float64)
+        if T.shape != (4, 4) or not np.all(np.isfinite(T)):
+            raise ValueError("matriz 4x4 inválida")
+        R = T[:3, :3]
+        if not np.allclose(R @ R.T, np.eye(3), atol=1e-3) or np.linalg.det(R) < 0.99:
+            raise ValueError("la rotación no es ortonormal (det != 1)")
+        entry = {"is_calibrated": True, "calibration_date": time.strftime("%Y-%m-%d %H:%M:%S"),
+                 "matrix_4x4": T.tolist()}
+        entry.update({k: v for k, v in info.items() if v is not None})
+        with self._config_lock:
+            self.config["extrinsics_cam2_to_cam1"] = entry
+            if self.config_path:
+                tmp = self.config_path + ".tmp"
+                os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(self.config, f, indent=4, ensure_ascii=False)
+                os.replace(tmp, self.config_path)
+        return entry
+
+    # ---- modo de vista ----
     def set_active_camera(self, idx):
         self._active_cam_idx = 0 if idx == 0 else 1
 
@@ -788,11 +851,109 @@ class SyntheticDualSource(SyntheticSource):
 
     def _emit(self, depth, color, meta, settings, t0):
         with self._emit_lock:
-            super()._emit(depth, color, meta, settings, t0)
+            BaseSource._emit(self, depth, color, meta, settings, t0)
+
+    # ---- estado por cámara ----
+    def _set_cam(self, idx, **kw):
+        with self._lock:
+            self._cams[idx].update(kw)
+            if kw.get("state") not in (None, "streaming"):
+                self._cams[idx]["fps"] = 0.0
+
+    def _cam_frame(self, idx, fps=None):
+        with self._lock:
+            c = self._cams[idx]
+            c["last_frame"] = time.time()
+            c["frames"] += 1
+            if fps is not None:
+                c["fps"] = fps
+
+    def cameras_status(self, stall_s=2.5):
+        now = time.time()
+        out = []
+        with self._lock:
+            cams = [dict(c) for c in self._cams.values()]
+        for c in cams:
+            last = c.pop("last_frame")
+            c["age_s"] = None if last is None else round(now - last, 2)
+            if c["state"] == "streaming" and c["age_s"] is not None and c["age_s"] > stall_s:
+                c["state"], c["fps"] = "stalled", 0.0
+                c["message"] = f"Sin cuadros nuevos desde hace {c['age_s']:.0f} s"
+            c["simulated"] = self.simulated
+            out.append(c)
+        return out
+
+    def status(self):
+        st = BaseSource.status(self)
+        cams = self.cameras_status()
+        live = [c for c in cams if c["state"] == "streaming"]
+        st["dual"] = True
+        st["simulated"] = self.simulated
+        st["cams"] = cams
+        st["serial"] = " + ".join(c["serial"] for c in cams)
+        if cams and len(live) == len(cams):
+            st["state"] = "streaming"
+            st["message"] = ("Simulación: 2 cámaras sintéticas" if self.simulated
+                             else f"{len(cams)} cámaras en vivo")
+        elif live:
+            down = [c for c in cams if c["state"] != "streaming"]
+            st["state"] = "degraded"
+            st["message"] = "; ".join(f"Cam {c['idx'] + 1} ({c['serial'][-4:]}): {c['message']}" for c in down)
+        elif cams and all(c["state"] == "no_device" for c in cams):
+            st["state"], st["message"] = "no_device", "Ninguna de las 2 RealSense configuradas está conectada"
+        elif any(c["state"] == "starting" for c in cams):
+            st["state"], st["message"] = "starting", "Abriendo cámaras..."
+        elif st.get("state") != "stopped":
+            st["state"] = "error"
+            st["message"] = "; ".join(f"Cam {c['idx'] + 1}: {c['message']}" for c in cams) or "Sin cámaras"
+        st["fps"] = round(sum(c["fps"] for c in live) / len(live), 1) if live else 0.0
+        return st
+
+
+# --------------------------------------------------------------------------- #
+# Sintética Dual (Simulación de 2 cámaras en vivo con extrínsecas)
+# --------------------------------------------------------------------------- #
+class SyntheticDualSource(_DualMixin, SyntheticSource):
+    """Dos cámaras sintéticas que ven la MISMA escena; Cam 2 desplazada CAM2_OFFSET en x.
+    Verdad de referencia: T(2->1) = traslación (+CAM2_OFFSET, 0, 0). Útil para tests."""
+    name = "synthetic_dual"
+    simulated = True
+    CAM2_OFFSET = 0.25
+
+    def __init__(self, store, on_frame, has_demand=lambda: True, log=print):
+        super().__init__(store, on_frame, has_demand=has_demand, log=log)
+        self._init_dual(None, ["SIM-CAM1-0777", "SIM-CAM2-1709"])
+        T = np.eye(4)
+        T[0, 3] = self.CAM2_OFFSET
+        self.config["extrinsics_cam2_to_cam1"] = {"is_calibrated": True, "matrix_4x4": T.tolist(),
+                                                   "method": "verdad de referencia (simulación)"}
+
+    def _render(self, idx, di, ci, t, s, rng):
+        off = self.CAM2_OFFSET if idx == 1 else 0.0
+        z, _ = self._trace(di, (off, 0.0, 0.0), t, want_color=False)
+        z = z + rng.normal(0, 1, z.shape).astype(np.float32) * (0.0015 * z * z)
+        z[(z < s.near) | (z > s.far)] = 0
+        depth = np.clip(z * 1000.0, 0, 65535).astype(np.uint16)
+        origin_color = (off - self.BASELINE[0], -self.BASELINE[1], -self.BASELINE[2])
+        _, color = self._trace(ci, origin_color, t, want_color=True)
+        return depth, color
+
+    def _snapshot(self, idx, di, depth, t):
+        """Snapshot ALINEADO como el de la cámara real: color re-trazado desde el centro de
+        profundidad con sus intrínsecas, de modo que color[v, u] corresponde a depth[v, u]."""
+        import cv2
+        off = self.CAM2_OFFSET if idx == 1 else 0.0
+        _, color = self._trace(di, (off, 0.0, 0.0), t, want_color=True)
+        heat = cv2.cvtColor(cv2.applyColorMap(cv2.convertScaleAbs(depth, alpha=0.03), cv2.COLORMAP_JET),
+                            cv2.COLOR_BGR2RGB)
+        return {"color": color, "depth": depth.copy(), "heat": heat, "intrinsics": dict(di),
+                "depth_scale": 0.001, "timestamp": time.time(), "serial": self.serials[idx], "cam_idx": idx}
 
     def _run(self):
-        self._set_status(state="streaming", message="Dual RealSense Simulado (2 cámaras)",
-                         device="Dual RealSense D455 (Simulado)", serial="SIM-0777 + SIM-1709", usb="3.2", dual=True)
+        self._set_status(state="streaming", message="Simulación: 2 cámaras sintéticas",
+                         device="Dual RealSense D455 (Simulado)", serial=" + ".join(self.serials), usb="-", dual=True)
+        for i in self._cams:
+            self._set_cam(i, state="streaming", message="Simulada")
         rng = np.random.default_rng(0)
         cache = {}
         t_start = time.time()
@@ -803,6 +964,8 @@ class SyntheticDualSource(SyntheticSource):
             period = 1.0 / max(1, s.fps)
             tick = time.perf_counter()
             if not self.has_demand():
+                for i in self._cams:
+                    self._cam_frame(i)  # la cámara simulada sigue "viva" aunque nadie mire
                 self._stop.wait(period)
                 continue
             t0 = time.perf_counter()
@@ -819,83 +982,34 @@ class SyntheticDualSource(SyntheticSource):
                 self._set_status(profile=f"SIM D {dw}x{dh} · RGB {cw}x{ch} @ {s.fps} FPS")
             di, ci = cache[key]
 
-            meta0 = build_meta(
-                1, di, 0.001, ci, [1, 0, 0, 0, 1, 0, 0, 0, 1], list(self.BASELINE),
-                extra={"device": "RealSense D455 (MASTER)", "serial": self.serials[0], "source": self.name, "cam_idx": 0}
-            )
-            meta1 = build_meta(
-                2, di, 0.001, ci, [1, 0, 0, 0, 1, 0, 0, 0, 1], list(self.BASELINE),
-                extra={"device": "RealSense D455 (SLAVE)", "serial": self.serials[1], "source": self.name, "cam_idx": 1}
-            )
+            with self._capture_lock:
+                req = self._capture_req
+                self._capture_req = None
+            depths = {}
+            for idx in (0, 1):
+                visible = self.view_mode == "dual" or self._active_cam_idx == idx
+                if req is None and not visible:
+                    continue
+                depth, color = self._render(idx, di, ci, t, s, rng)
+                depths[idx] = depth
+                self._cam_frame(idx, fps=float(s.fps))
+                if visible:
+                    meta = build_meta(idx + 1, di, 0.001, ci, [1, 0, 0, 0, 1, 0, 0, 0, 1], list(self.BASELINE),
+                                      extra={"device": f"RealSense D455 ({'MASTER' if idx == 0 else 'SLAVE'}, simulada)",
+                                             "serial": self.serials[idx], "source": self.name, "cam_idx": idx})
+                    self._emit(depth, color, meta, s, t0)
 
-            color0, depth0 = None, None
-            color1, depth1 = None, None
-
-            if self.view_mode == "dual" or self._active_cam_idx == 0:
-                z0, _ = self._trace(di, (0.0, 0.0, 0.0), t, want_color=False)
-                z0 = z0 + rng.normal(0, 1, z0.shape).astype(np.float32) * (0.0015 * z0 * z0)
-                z0[(z0 < s.near) | (z0 > s.far)] = 0
-                depth0 = np.clip(z0 * 1000.0, 0, 65535).astype(np.uint16)
-                origin0 = tuple(-v for v in self.BASELINE)
-                _, color0 = self._trace(ci, origin0, t, want_color=True)
-                self._emit(depth0, color0, meta0, s, t0)
-
-            if self.view_mode == "dual" or self._active_cam_idx == 1:
-                z1, _ = self._trace(di, (0.25, 0.0, 0.0), t, want_color=False)
-                z1 = z1 + rng.normal(0, 1, z1.shape).astype(np.float32) * (0.0015 * z1 * z1)
-                z1[(z1 < s.near) | (z1 > s.far)] = 0
-                depth1 = np.clip(z1 * 1000.0, 0, 65535).astype(np.uint16)
-                origin1 = tuple(0.25 - v for v in self.BASELINE)
-                _, color1 = self._trace(ci, origin1, t, want_color=True)
-                self._emit(depth1, color1, meta1, s, t0)
-
-            if self._capture_req is not None:
-                with self._capture_lock:
-                    req = self._capture_req
-                    self._capture_req = None
-                if req is not None:
-                    try:
-                        import cv2
-                        c0 = color0 if color0 is not None else np.zeros((ch, cw, 3), np.uint8)
-                        d0 = depth0 if depth0 is not None else np.zeros((dh, dw), np.uint16)
-                        c1 = color1 if color1 is not None else np.zeros((ch, cw, 3), np.uint8)
-                        d1 = depth1 if depth1 is not None else np.zeros((dh, dw), np.uint16)
-
-                        snap0 = {
-                            "color": c0.copy(),
-                            "depth": d0.copy(),
-                            "heat": cv2.cvtColor(cv2.applyColorMap(cv2.convertScaleAbs(d0, alpha=0.03), cv2.COLORMAP_JET), cv2.COLOR_BGR2RGB),
-                            "intrinsics": dict(di),
-                            "depth_scale": 0.001,
-                            "timestamp": time.time(),
-                            "serial": self.serials[0],
-                            "cam_idx": 0
-                        }
-                        snap1 = {
-                            "color": c1.copy(),
-                            "depth": d1.copy(),
-                            "heat": cv2.cvtColor(cv2.applyColorMap(cv2.convertScaleAbs(d1, alpha=0.03), cv2.COLORMAP_JET), cv2.COLOR_BGR2RGB),
-                            "intrinsics": dict(di),
-                            "depth_scale": 0.001,
-                            "timestamp": time.time(),
-                            "serial": self.serials[1],
-                            "cam_idx": 1
-                        }
-                        req["result"] = {
-                            "cam1": snap0,
-                            "cam2": snap1,
-                            "color": snap0["color"],
-                            "depth": snap0["depth"],
-                            "heat": snap0["heat"],
-                            "intrinsics": snap0["intrinsics"],
-                            "depth_scale": 0.001,
-                            "timestamp": snap0["timestamp"],
-                            "extrinsics": self.get_extrinsics()
-                        }
-                    except Exception as ex:
-                        req["error"] = ex
-                    finally:
-                        req["event"].set()
+            if req is not None:
+                try:
+                    snap0, snap1 = (self._snapshot(i, di, depths[i], t) for i in (0, 1))
+                    req["result"] = {"cam1": snap0, "cam2": snap1, "color": snap0["color"], "depth": snap0["depth"],
+                                     "heat": snap0["heat"], "intrinsics": snap0["intrinsics"], "depth_scale": 0.001,
+                                     "timestamp": snap0["timestamp"], "dt_ms": 0.0, "dt_source": "simulación",
+                                     "extrinsics": self.get_extrinsics()}
+                except Exception as ex:  # noqa: BLE001
+                    req["error"] = ex
+                finally:
+                    req["event"].set()
 
             self._stop.wait(max(0.0, period - (time.perf_counter() - tick)))
 
@@ -906,170 +1020,173 @@ class SyntheticDualSource(SyntheticSource):
 # --------------------------------------------------------------------------- #
 # Dual RealSense (Soporte y Captura Multi-Cámara Simultánea)
 # --------------------------------------------------------------------------- #
-class DualRealSenseSource(BaseSource):
+class DualRealSenseSource(_DualMixin, BaseSource):
+    """Dos D4xx sin cable de sincronía (inter_cam_sync_mode = 0), un hilo por cámara.
+
+    Cada worker es independiente: si una cámara se desconecta, la otra sigue transmitiendo,
+    el estado pasa a 'degraded' y el worker reintenta (con hardware_reset tras fallos
+    repetidos) hasta que la cámara vuelve.
+    """
     name = "dual_realsense"
+    FIRST_FRAME_TIMEOUT_MS = 8000
+    FRAME_TIMEOUT_MS = 2000
+    STALL_SECONDS = 6.0
+    HARD_RESET_AFTER_FAILURES = 2
 
     def __init__(self, store, on_frame, has_demand=lambda: True, log=print, config_path=None):
         super().__init__(store, on_frame, has_demand=has_demand, log=log)
         import pyrealsense2 as rs
         self.rs = rs
-
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self.config_path = config_path or os.path.join(base_dir, "config", "dual_camera_config.json")
+        self.config_path = config_path or DUAL_CONFIG_PATH
         self.config = self._load_config()
-
-        # Determinar números de serie
-        configured_serials = [c["serial"] for c in self.config.get("cameras", []) if c.get("serial")]
-        if len(configured_serials) >= 2:
-            self.serials = configured_serials[:2]
-        else:
-            ctx = self.rs.context()
-            devs = list(ctx.query_devices())
-            self.serials = [d.get_info(self.rs.camera_info.serial_number) for d in devs[:2]]
-
-        self.log(f"[DualSource] Cámaras configuradas: Cam 1={self.serials[0] if len(self.serials) > 0 else 'None'}, "
-                 f"Cam 2={self.serials[1] if len(self.serials) > 1 else 'None'}")
-
-        self._active_cam_idx = 0  # Cámara mostrada en modo 'solo' (0 o 1)
-        self.view_mode = "dual"   # 'dual': se transmiten ambas cámaras; 'solo': solo la activa
-        self._emit_lock = threading.Lock()  # _emit se llama desde dos hilos
-        self._cam_stats = {s: {"fps": 0.0, "frames": 0, "t0": time.time(), "state": "init"} for s in self.serials}
-        self._cam_data = {0: None, 1: None}
-        self._cam_lock = threading.Lock()
+        # Seriales: los del JSON fijan cuál es Cam 1 y cuál Cam 2; si faltan, se completan con las conectadas
+        serials = [c["serial"] for c in self.config.get("cameras", []) if c.get("serial")][:2]
+        if len(serials) < 2:
+            found = [d.get_info(rs.camera_info.serial_number) for d in rs.context().query_devices()]
+            serials = (serials + [s for s in found if s not in serials])[:2]
+        self._init_dual(self.config_path, serials)
+        self.log("[DualSource] Cámaras configuradas: " +
+                 ", ".join(f"Cam {i + 1}={s}" for i, s in enumerate(self.serials)))
         self._workers = []
-
-    def _load_config(self):
-        if os.path.isfile(self.config_path):
-            try:
-                with open(self.config_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception as e:
-                self.log(f"[DualSource] Error leyendo {self.config_path}: {e}")
-        return {"cameras": [], "extrinsics_cam2_to_cam1": {"matrix_4x4": np.eye(4).tolist()}}
-
-    def get_extrinsics(self):
-        mat = self.config.get("extrinsics_cam2_to_cam1", {}).get("matrix_4x4")
-        if mat is None:
-            return np.eye(4, dtype=np.float64)
-        return np.array(mat, dtype=np.float64)
-
-    def set_active_camera(self, idx):
-        self._active_cam_idx = 0 if idx == 0 else 1
-
-    def set_view_mode(self, mode):
-        self.view_mode = "dual" if mode == "dual" else "solo"
 
     def capture_scan(self, timeout=8.0):
         """En modo dual, la 'Captura Simple' también usa el sensor virtual fusionado (ambas cámaras)."""
         return self.capture_dual_scan(timeout=timeout)
 
+    def _cam_config(self, serial):
+        return next((c for c in self.config.get("cameras", []) if c.get("serial") == serial), {})
+
     def _emitter_for(self, serial, is_master):
-        for c in self.config.get("cameras", []):
-            if c.get("serial") == serial and "emitter_enabled" in c:
-                return bool(c["emitter_enabled"])
-        return True
-    def _emit(self, depth, color, meta, settings, t0):
-        with self._emit_lock:
-            super()._emit(depth, color, meta, settings, t0)
+        c = self._cam_config(serial)
+        return bool(c["emitter_enabled"]) if "emitter_enabled" in c else True
 
     def _run(self):
+        if len(self.serials) < 2:
+            self._set_status(state="error", message="Se requieren 2 cámaras RealSense (configura sus seriales)")
+            return
         self.log("[DualSource] Iniciando workers concurrentes para ambas cámaras...")
         self._set_status(state="starting", message="Iniciando cámaras RealSense Dual...",
                          device="Dual RealSense D455", dual=True)
-
-        if len(self.serials) < 2:
-            self._set_status(state="error", message="Se requieren al menos 2 cámaras RealSense conectadas")
-            return
-
-        # Iniciar hilos dedicados para cada cámara (Slave primero, luego Master)
-        t_slave = threading.Thread(target=self._cam_worker, args=(1, self.serials[1], False), name="CamWorker-Slave", daemon=True)
-        t_master = threading.Thread(target=self._cam_worker, args=(0, self.serials[0], True), name="CamWorker-Master", daemon=True)
-
+        # Slave primero, luego Master
+        t_slave = threading.Thread(target=self._cam_worker, args=(1, self.serials[1], False),
+                                   name="CamWorker-Slave", daemon=True)
+        t_master = threading.Thread(target=self._cam_worker, args=(0, self.serials[0], True),
+                                    name="CamWorker-Master", daemon=True)
         self._workers = [t_master, t_slave]
         t_slave.start()
-        time.sleep(0.5)
+        self._stop.wait(0.5)
         t_master.start()
-
-        self._set_status(state="streaming", message="Dual RealSense D455 (2 cámaras activas)",
-                         device="Dual RealSense D455", serial=f"{self.serials[0]} + {self.serials[1]}",
-                         usb="3.2", dual=True)
-
-        # Esperar hasta señal de parada
-        while not self._stop.is_set():
-            self._stop.wait(0.5)
-
+        self._stop.wait()
         self.log("[DualSource] Deteniendo workers de cámara...")
         for w in self._workers:
-            w.join(timeout=3.0)
+            w.join(timeout=5.0)
+        self._set_status(state="stopped", message="Captura detenida")
         self.log("[DualSource] Workers detenidos.")
 
     def _cam_worker(self, cam_idx, serial, is_master):
+        fails = 0
+        while not self._stop.is_set():
+            if fails >= self.HARD_RESET_AFTER_FAILURES:
+                self._reset_device(cam_idx, serial)
+                fails = 0
+            try:
+                self._cam_session(cam_idx, serial, is_master)
+            except NoDeviceError:
+                self._set_cam(cam_idx, state="no_device", message="No conectada (revisa el cable USB 3)")
+                self._stop.wait(2.0)
+            except Exception as e:  # noqa: BLE001
+                fails += 1
+                self.log(f"[CamWorker {cam_idx}] ({serial}) Fallo #{fails}: {e}")
+                self._set_cam(cam_idx, state="error", message=f"Señal perdida ({e}). Reintentando...")
+                self._stop.wait(min(2.0 * fails, 10.0))
+        self._set_cam(cam_idx, state="stopped", message="Detenida")
+        self.log(f"[CamWorker {cam_idx}] ({serial}) Worker finalizado.")
+
+    def _find_device(self, serial):
+        rs = self.rs
+        for d in rs.context().query_devices():
+            if d.supports(rs.camera_info.serial_number) and d.get_info(rs.camera_info.serial_number) == serial:
+                return d
+        return None
+
+    def _reset_device(self, cam_idx, serial):
+        self._set_cam(cam_idx, state="starting", message="Reiniciando hardware (USB)...")
+        dev = self._find_device(serial)
+        if dev is None:
+            return
+        try:
+            dev.hardware_reset()
+        except Exception as e:  # noqa: BLE001
+            self.log(f"[CamWorker {cam_idx}] hardware_reset falló: {e}")
+            return
+        self._stop.wait(5.0)  # Windows necesita unos segundos para re-enumerar el USB
+
+    def _cam_session(self, cam_idx, serial, is_master):
+        """Abre la cámara y transmite hasta que se pida parar (retorna) o falle (excepción)."""
         rs = self.rs
         role_str = "MASTER" if is_master else "SLAVE"
-        self.log(f"[CamWorker {cam_idx}] ({serial}) Iniciando pipeline {role_str}...")
+        dev = self._find_device(serial)
+        if dev is None:
+            raise NoDeviceError(serial)
+        usb = dev.get_info(rs.camera_info.usb_type_descriptor) \
+            if dev.supports(rs.camera_info.usb_type_descriptor) else None
+        self._set_cam(cam_idx, state="starting", message=f"Abriendo ({role_str}, USB {usb or '?'})...", usb=usb)
+        if usb and usb.startswith("2"):
+            self.log(f"[CamWorker {cam_idx}] AVISO: {serial} por USB {usb}; 2 x 848x480@30 requiere USB 3")
 
-        ctx = rs.context()
-        pipeline = rs.pipeline(ctx)
+        w, h, fps = (self._cam_config(serial).get("profile") or [848, 480, 30])[:3]
+        pipeline = rs.pipeline(rs.context())
         cfg = rs.config()
         cfg.enable_device(serial)
-        cfg.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 30)
-        cfg.enable_stream(rs.stream.color, 848, 480, rs.format.rgb8, 30)
-
+        cfg.enable_stream(rs.stream.depth, int(w), int(h), rs.format.z16, int(fps))
+        cfg.enable_stream(rs.stream.color, int(w), int(h), rs.format.rgb8, int(fps))
         align = rs.align(rs.stream.color)
         spatial = rs.spatial_filter()
-        temporal = rs.temporal_filter()
         colorizer = rs.colorizer()
 
-        profile = None
+        profile = pipeline.start(cfg)
         try:
-            profile = pipeline.start(cfg)
             sensor = profile.get_device().first_depth_sensor()
-
-            # Emisor IR según config (por defecto ambos encendidos: los patrones de varios D4xx no se
-            # degradan entre sí y la cámara secundaria gana textura para el emparejamiento estéreo)
+            emitter = self._emitter_for(serial, is_master)
             if sensor.supports(rs.option.emitter_enabled):
                 try:
-                    sensor.set_option(rs.option.emitter_enabled, 1 if self._emitter_for(serial, is_master) else 0)
-                except Exception as ex:
+                    sensor.set_option(rs.option.emitter_enabled, 1 if emitter else 0)
+                except Exception as ex:  # noqa: BLE001
                     self.log(f"[CamWorker {cam_idx}] Aviso al configurar emisor IR: {ex}")
-
+            self._set_cam(cam_idx, emitter=emitter)
             depth_scale = float(sensor.get_depth_scale())
-            cprof = profile.get_stream(rs.stream.color).as_video_stream_profile()
-            ci = cprof.get_intrinsics()
-            color_intr = {"width": ci.width, "height": ci.height,
-                          "fx": ci.fx, "fy": ci.fy, "ppx": ci.ppx, "ppy": ci.ppy}
 
-            # Construir meta específico para esta cámara (meta_id 1 para Cam 0, meta_id 2 para Cam 1)
             from .protocol import build_meta
-            cam_meta_id = cam_idx + 1
-            cam_meta = build_meta(
-                cam_meta_id,
-                color_intr,
-                depth_scale,
-                color_intr,
-                [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
-                [0.0, 0.0, 0.0],
-                extra={
-                    "device": f"RealSense D455 ({role_str})",
-                    "serial": serial,
-                    "source": self.name,
-                    "cam_idx": cam_idx
-                }
-            )
+            cam_meta = None
+            pipeline.wait_for_frames(self.FIRST_FRAME_TIMEOUT_MS)  # calentamiento
+            self._set_cam(cam_idx, state="streaming", message=f"En vivo ({role_str})")
+            self._set_status(profile=f"D+RGB {w}x{h} @ {fps} FPS por cámara")
+            self.log(f"[CamWorker {cam_idx}] ({serial}) Transmitiendo {w}x{h}@{fps}.")
 
-            # Calentamiento
-            pipeline.wait_for_frames(8000)
-            self.log(f"[CamWorker {cam_idx}] ({serial}) Calentamiento completado. Transmitiendo.")
-
-            last_fps_t = time.time()
-            frames_fps = 0
-
+            last_ok = time.time()
+            fps_n, fps_t0 = 0, last_ok
             while not self._stop.is_set():
                 try:
-                    frames = pipeline.wait_for_frames(2500)
-                except Exception as e:
-                    self.log(f"[CamWorker {cam_idx}] ({serial}) Error wait_for_frames: {e}")
+                    frames = pipeline.wait_for_frames(self.FRAME_TIMEOUT_MS)
+                except RuntimeError:
+                    if time.time() - last_ok > self.STALL_SECONDS:
+                        raise RuntimeError(f"sin cuadros durante {self.STALL_SECONDS:.0f} s")
                     continue
+                arrival = time.perf_counter()  # resolución sub-ms (time.time() va a saltos de ~16 ms en Windows)
+                last_ok = time.time()
+                fps_n += 1
+                fps_now = None
+                if last_ok - fps_t0 >= 1.0:
+                    fps_now = round(fps_n / (last_ok - fps_t0), 1)
+                    fps_n, fps_t0 = 0, last_ok
+                self._cam_frame(cam_idx, fps=fps_now)
+
+                with self._capture_lock:
+                    req = self._capture_req
+                    wants_snap = req is not None and cam_idx not in req.setdefault("dual_snaps", {})
+                visible = (self.view_mode == "dual" or cam_idx == self._active_cam_idx) and self.has_demand()
+                if not wants_snap and not visible:
+                    continue  # nadie necesita este cuadro: no alinear ni copiar (ahorra CPU)
 
                 t0 = time.perf_counter()
                 aligned = align.process(frames)
@@ -1077,88 +1194,79 @@ class DualRealSenseSource(BaseSource):
                 color_f = aligned.get_color_frame()
                 if not depth_f or not color_f:
                     continue
-
                 c_ci = color_f.profile.as_video_stream_profile().get_intrinsics()
-                c_intr = {
-                    "width": c_ci.width, "height": c_ci.height,
-                    "fx": c_ci.fx, "fy": c_ci.fy, "ppx": c_ci.ppx, "ppy": c_ci.ppy
-                }
+                c_intr = {"width": c_ci.width, "height": c_ci.height,
+                          "fx": c_ci.fx, "fy": c_ci.fy, "ppx": c_ci.ppx, "ppy": c_ci.ppy}
 
-                # Si hay petición de captura / snapshot
-                if self._capture_req is not None:
-                    try:
-                        f_depth = temporal.process(spatial.process(depth_f)).as_depth_frame()
-                        heat_f = colorizer.colorize(f_depth).as_video_frame()
-
-                        c_color_np = _to_np(color_f, c_ci.height, c_ci.width, 3, np.uint8)
-                        c_depth_np = _to_np(f_depth, c_ci.height, c_ci.width, 1, np.uint16)
-                        c_heat_np = _to_np(heat_f, c_ci.height, c_ci.width, 3, np.uint8)
-
-                        snap = {
-                            "color": c_color_np,
-                            "depth": c_depth_np,
-                            "heat": c_heat_np,
-                            "intrinsics": c_intr,
-                            "depth_scale": depth_scale,
-                            "timestamp": time.time(),
-                            "serial": serial,
-                            "cam_idx": cam_idx
-                        }
-
-                        with self._capture_lock:
-                            req = self._capture_req
-                            if req is not None:
-                                if req.get("dual_snaps") is None:
-                                    req["dual_snaps"] = {}
-                                req["dual_snaps"][cam_idx] = snap
-                                # Si ya se tienen los snapshots de ambas cámaras
-                                if len(req["dual_snaps"]) >= 2:
-                                    snaps = req["dual_snaps"]
-                                    self._capture_req = None
-                                    req["result"] = {
-                                        "cam1": snaps[0],
-                                        "cam2": snaps[1],
-                                        "color": snaps[0]["color"],
-                                        "depth": snaps[0]["depth"],
-                                        "heat": snaps[0]["heat"],
-                                        "intrinsics": snaps[0]["intrinsics"],
-                                        "depth_scale": snaps[0]["depth_scale"],
-                                        "timestamp": snaps[0]["timestamp"],
-                                        "extrinsics": self.get_extrinsics()
-                                    }
-                                    req["event"].set()
-                    except Exception as ex:
-                        self.log(f"[CamWorker {cam_idx}] Error procesando snapshot: {ex}")
-
-                # Preparar frame para visualización
-                s = self.store.get()
-                depth_np = _to_np(depth_f, c_ci.height, c_ci.width, 1, np.uint16)
-                color_np = _to_np(color_f, c_ci.height, c_ci.width, 3, np.uint8)
-
-                with self._cam_lock:
-                    self._cam_data[cam_idx] = (depth_np, color_np, cam_meta, s, t0)
-
-                # Emitir si estamos en modo dual o si esta es la cámara seleccionada
-                if (self.view_mode == "dual" or cam_idx == self._active_cam_idx) and self.has_demand():
+                if wants_snap:
+                    self._store_snapshot(cam_idx, serial, frames, arrival, depth_f, color_f, c_intr, depth_scale,
+                                         spatial, colorizer)
+                if visible:
+                    if cam_meta is None:  # profundidad alineada al color: mismas intrínsecas y E = I
+                        cam_meta = build_meta(cam_idx + 1, c_intr, depth_scale, c_intr,
+                                              [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0],
+                                              extra={"device": f"RealSense D455 ({role_str})", "serial": serial,
+                                                     "source": self.name, "cam_idx": cam_idx})
+                    s = self.store.get()
+                    depth_np = _to_np(depth_f, c_ci.height, c_ci.width, 1, np.uint16)
+                    color_np = _to_np(color_f, c_ci.height, c_ci.width, 3, np.uint8)
                     self._emit(depth_np, color_np, cam_meta, s, t0)
-
-                frames_fps += 1
-                now = time.time()
-                if now - last_fps_t >= 1.0:
-                    fps = frames_fps / (now - last_fps_t)
-                    self._cam_stats[serial]["fps"] = round(fps, 1)
-                    frames_fps = 0
-                    last_fps_t = now
-
-        except Exception as e:
-            self.log(f"[CamWorker {cam_idx}] ({serial}) Error crítico: {e}")
         finally:
-            if pipeline:
-                try:
-                    pipeline.stop()
-                except Exception:
-                    pass
-            self.log(f"[CamWorker {cam_idx}] ({serial}) Worker finalizado.")
+            try:
+                pipeline.stop()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _store_snapshot(self, cam_idx, serial, frames, arrival, depth_f, color_f, c_intr, depth_scale,
+                        spatial, colorizer):
+        """Guarda el primer cuadro de esta cámara tras la petición; con las dos, responde.
+
+        Δt entre cámaras: con los timestamps de hardware si ambas están en el dominio de tiempo
+        global de librealsense (comparables entre cámaras); si no, con la hora de llegada al host
+        (perf_counter, tomada justo después de wait_for_frames). Una cámara cae fuera del dominio
+        global cuando no entrega metadatos de cuadro (en Windows: registro de metadatos UVC sin
+        instalar para ese dispositivo).
+        """
+        rs = self.rs
+        try:
+            f_depth = spatial.process(depth_f).as_depth_frame()
+            heat_f = colorizer.colorize(f_depth).as_video_frame()
+            h, w = c_intr["height"], c_intr["width"]
+            snap = {
+                "color": _to_np(color_f, h, w, 3, np.uint8),
+                "depth": _to_np(f_depth, h, w, 1, np.uint16),
+                "heat": _to_np(heat_f, h, w, 3, np.uint8),
+                "intrinsics": c_intr,
+                "depth_scale": depth_scale,
+                "timestamp": time.time(),
+                "frame_timestamp_ms": float(frames.get_timestamp()),
+                "arrival_s": arrival,
+                "global_time": frames.get_frame_timestamp_domain() == rs.timestamp_domain.global_time,
+                "serial": serial,
+                "cam_idx": cam_idx,
+            }
+        except Exception as ex:  # noqa: BLE001
+            self.log(f"[CamWorker {cam_idx}] Error procesando snapshot: {ex}")
+            return
+        with self._capture_lock:
+            req = self._capture_req
+            if req is None or cam_idx in req["dual_snaps"]:
+                return
+            req["dual_snaps"][cam_idx] = snap
+            if len(req["dual_snaps"]) < 2:
+                return
+            s0, s1 = req["dual_snaps"][0], req["dual_snaps"][1]
+            if s0["global_time"] and s1["global_time"]:
+                dt_s, dt_source = (s1["frame_timestamp_ms"] - s0["frame_timestamp_ms"]) / 1000.0, "hardware (global_time)"
+            else:
+                dt_s, dt_source = s1["arrival_s"] - s0["arrival_s"], "llegada al host"
+            s1["timestamp"] = s0["timestamp"] + dt_s
+            self._capture_req = None
+            req["result"] = {"cam1": s0, "cam2": s1, "color": s0["color"], "depth": s0["depth"],
+                             "heat": s0["heat"], "intrinsics": s0["intrinsics"], "depth_scale": s0["depth_scale"],
+                             "timestamp": s0["timestamp"], "dt_ms": round(abs(dt_s) * 1000.0, 1),
+                             "dt_source": dt_source, "extrinsics": self.get_extrinsics()}
+            req["event"].set()
 
     def capture_dual_scan(self, timeout=8.0):
         """Captura simultáneamente de ambas cámaras y fusiona las nubes en Saves/."""
@@ -1254,6 +1362,10 @@ class DualRealSenseSource(BaseSource):
                 "cam2": {"serial": self.serials[1], "role": "slave", "intrinsics": snap2["intrinsics"]}
             },
             "extrinsics_cam2_to_cam1": T_2_to_1.tolist(),
+            "calibration": self.calibration_info(),
+            "dt_ms": dual_snap.get("dt_ms"),
+            "dt_source": dual_snap.get("dt_source"),
+            "simulated": self.simulated,
             "points_cam1": len(pcd1.points),
             "points_cam2": len(pcd2.points),
             "points_fused": len(pcd_clean.points),

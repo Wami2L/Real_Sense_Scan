@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "live3d", "runtimeExecutable": "python", "runtimeArgs": ["-u", "app.py"], "port": 5002 },
+    { "name": "estudio", "runtimeExecutable": "python", "runtimeArgs": ["-u", "test_fotogrametria/servidor_test.py"], "port": 5005 }
+  ]
+}
