@@ -17,6 +17,7 @@ En esta carpeta se recopilan las propuestas arquitectónicas, planes técnicos, 
 | **07** | Calibración Interactiva y Fusión Dual sin Duplicados | **Plan de Ejecución Listo** | [MD](file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/07_Plan_Calibracion_Interactiva_y_Fusion_Sin_Duplicados.md) · [PDF](file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/07_Plan_Calibracion_Interactiva_y_Fusion_Sin_Duplicados.pdf) |
 | **08** | Fotogrametría RGB-D y Calibración Automática en Tiempo Real | **Propuesta Técnica Lista** | [MD](file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/08_Fotogrametria_RGBD_y_Calibracion_Automatica_Tiempo_Real.md) · [PDF](file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/08_Fotogrametria_RGBD_y_Calibracion_Automatica_Tiempo_Real.pdf) |
 | **09** | Documentación de Cambios: Alineación Virtual y Estudio de Capturas | **Completado & Validado en HW** | [MD](file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/09_Documentacion_Cambios_Alineacion_Virtual_y_Estudio_Capturas.md) · [PDF](file:///c:/Users/Usuario/Documents/RealSenseScans/documentacion/planes/09_Documentacion_Cambios_Alineacion_Virtual_y_Estudio_Capturas.pdf) |
+| **10** | Plan de Optimización y Consolidación para Pre-Producción | **Propuesta** | [MD](10_Plan_Optimizacion_Pre_Produccion.md) |
 
 ---
 
