@@ -49,8 +49,12 @@ instalar_dependencias.bat          # crea .venv e instala requirements.txt
 iniciar_sistema.bat                # lanza 5002 + 5005 y abre el navegador
 python app.py --synthetic --dual   # desarrollo sin cámaras
 python -m live3d.tools.probe_client  # cliente WS de prueba
+python -m pip install -r requirements-dev.txt
+python -m pytest                   # tests de humo (lanzan su propio servidor sintético en un puerto libre)
+python tools/bench_live3d.py --spawn --capture   # benchmark sintético; sin --spawn mide el servidor en 5002
 ```
-No hay tests automatizados todavía (ver plan 10).
+- Los tests y el benchmark con `--capture` escriben en `Saves/` (los tests limpian lo que crean).
+- Open3D 0.20: `ScalableTSDFVolume` devuelve vacío (C12 del plan 10). `UniformTSDFVolume` sí funciona.
 
 ## Plan vigente
 `documentacion/planes/10_Plan_Optimizacion_Pre_Produccion.md` — diagnóstico de ineficiencias y fases de mejora.

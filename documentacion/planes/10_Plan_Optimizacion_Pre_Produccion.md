@@ -34,6 +34,7 @@ Hay cuatro problemas de fondo:
 | C8 | No se guarda la **profundidad cruda** (solo un JPEG del mapa de calor y los PLY). | L1237-1245, L161-162 | No se puede volver a procesar una captura con mejor calibración o mejores parámetros. |
 | C9 | `intrinsic_matrix` en `metadata_camara.json` está **transpuesta** (`ppx, ppy` en la última fila). | L169-173 | Cualquier consumidor externo que lea la matriz tal cual la interpreta mal. |
 | C10 | `depth_trunc` incoherente entre módulos: 3.0 (simple), 4.0 (dual) y 2.5 (registro). | L147, L1190, `registration.py` L12 | Resultados distintos según la ruta de código. |
+| C12 | **El TSDF dual no funciona**: con Open3D 0.20.0 + numpy 2.5, `ScalableTSDFVolume` devuelve 0 vértices incluso con un plano trivial (`UniformTSDFVolume` sí funciona con los mismos datos). `capture_dual_scan` cae siempre, sin avisar, en el respaldo de Poisson. *Verificado el 2026-10-19; cubierto por un test `xfail` en `tests/test_geometria.py`.* | `registration.py` L247, `capture.py` L1214-1230 | La "malla TSDF sin duplicados" del plan 07 nunca se genera: sale Poisson sobre la nube voxelizada. |
 | C11 | `SyntheticDualSource` y `DualRealSenseSource` duplican la lógica de snapshot, meta y modo de vista. | L751-903 | Los cambios hay que hacerlos dos veces y el simulador ya diverge del real (meta con depth→color ≠ identidad). |
 
 ### 2.2 Servidor — `live3d/server.py`
@@ -99,6 +100,26 @@ Cada fase debe quedar funcionando en `--synthetic --dual` **y** en hardware ante
 - Tests de humo con `pytest` sobre la fuente sintética: arranque del servidor, ida y vuelta de `protocol.pack/decode`, `matrix_to_euler ↔ euler_to_matrix`, y que `capture_dual_scan` genere los archivos esperados.
 - Mover el código legado a `legacy/`: `app_legacy_flask.py`, `camera_manager.py`, `templates/`, `static/`, `escanear.py`.
 - **Criterio:** tabla de referencia "antes" con hardware real, guardada en este documento.
+
+**Estado (2026-10-19):** benchmark y tests de humo hechos. Falta la línea base con hardware y mover el código legado.
+
+- `python tools/bench_live3d.py [--spawn] [--capture] [--json archivo]`
+- `python -m pytest`: 22 tests pasan y 1 `xfail` (C12). Hay que instalar `requirements-dev.txt`.
+
+Línea base **sintética** (`--spawn`, 10 s, zlib+JPEG, misma máquina). Sirve para medir regresiones de código, no el rendimiento del hardware:
+
+| Métrica | Cam 1 | Cam 2 |
+|---|---|---|
+| FPS recibidos | 21.7 | 21.7 |
+| Mb/s | 22.1 | 21.8 |
+| KB/cuadro (depth / color) | 102.6 / 21.0 | 102.6 / 19.1 |
+| Latencia p50 / p95 | 4.5 / 6.6 ms | 4.3 / 7.0 ms |
+| Servidor | `proc_ms` 31.1 · `encode_ms` 4.2 | |
+| Captura dual | 2.69 s (malla vía Poisson, por C12) | |
+
+Notas: la fuente sintética está limitada por el trazado de rayos en numpy (no llega a 30 FPS). `camera_fps` del status (36.5) suma las dos cámaras porque `SyntheticDualSource` llama a `_tick_fps` en cada `_emit`. zlib nivel 1 solo comprime la profundidad unas 2:1.
+
+Línea base **con hardware** (pendiente): con `iniciar_sistema.bat` en marcha, ejecutar `python tools/bench_live3d.py --seconds 20 --capture --json bench_hw_antes.json` y copiar aquí la tabla.
 
 ### Fase 1 — Captura dual eficiente (mayor ganancia)
 - Extraer un `CameraWorker` reutilizable a partir de `RealSenseSource` (apertura con perfiles de respaldo, watchdog, `hardware_reset`, filtros según `Settings`). `DualRealSenseSource` pasa a ser N workers más la coordinación.
