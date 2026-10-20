@@ -12,6 +12,14 @@ Sistema integral para captura RGB-D, transmisión de nubes de puntos 3D en tiemp
 
 ## 🌟 Características Principales
 
+- **Escáner de Objetos → Blender → Unity** (`http://localhost:5002/objetos`):
+  - Base imprimible con marcadores ArUco (`imprimibles/base_escaneo_A3.pdf`): pose exacta de la cámara en cada toma.
+  - Encuadre guiado: el objeto se resalta en verde, el resto se ignora; avisos según el alcance de la D455.
+  - Malla limpia, a escala, de pie y con pivote en la base. Con dos cámaras corrige sola la calibración.
+  - Ajuste opcional en Blender (addon: abrir, limpieza rápida, *Publicar en Unity*).
+  - Unity (VR ScanWorld) recibe los objetos por un enlace privado y los construye con partículas de luz.
+  - Guía: [`documentacion/GUIA_ESCANER_OBJETOS.md`](documentacion/GUIA_ESCANER_OBJETOS.md).
+
 - **Streaming 3D en Vivo (Live3D):**
   - Servidor asíncrono de alto rendimiento (`aiohttp` + WebSockets).
   - Visor WebGL interactivo con Three.js y shaders personalizados para nubes de puntos de ultra baja latencia.
@@ -45,7 +53,8 @@ Sistema integral para captura RGB-D, transmisión de nubes de puntos 3D en tiemp
 
 2. **Iniciar el sistema:**  
    Ejecuta haciendo doble clic en `iniciar_sistema.bat`.
-   > Levanta el servidor Live 3D (puerto 5002) y el Estudio de Calibración (puerto 5005), abriendo el navegador automáticamente.
+   > Levanta el servidor Live 3D y escáner de objetos (5002), el Estudio de Calibración (5005) y el enlace con
+   > Unity (5010), y abre el escáner de objetos en el navegador.
 
 ### En Linux / macOS
 

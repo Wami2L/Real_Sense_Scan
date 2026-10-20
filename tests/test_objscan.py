@@ -156,7 +156,7 @@ def test_dual_con_calibracion_desajustada_se_corrige_sin_fantasmas(tmp_path):
     """La Cam 2 no ve la base y su calibración está mal (4 cm, 5°): el escaneo estima UNA
     corrección común con todas las tomas y la superficie sale igual de fiel."""
     from live3d.registration import euler_translation_to_matrix
-    sc1, sc2 = ObjectScene(), ObjectScene()
+    sc1, sc2 = ObjectScene(seed=1), ObjectScene(seed=101)   # ruido independiente en cada cámara
     sc2.sheet[:] = 1.0
     lib = Library(str(tmp_path / "lib"))
     s = ObjectScanSession("dual", base_dir=str(tmp_path), library=lib, log=lambda *a: None)
