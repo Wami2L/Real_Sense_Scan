@@ -159,3 +159,29 @@ def test_snapshot_dual_con_una_camara_caida_usa_la_otra(tmp_path):
     src._try_complete(req)
     assert req["event"].is_set() and req["result"].get("degraded")
     assert "cam2" in req["result"] and "cam1" not in req["result"]
+
+
+def test_snapshots_simultaneos_comparten_el_cuadro():
+    """El encuadre y una toma piden snapshot a la vez: ninguno debe quedarse esperando."""
+    import threading
+    from live3d.objscan.fuente import SyntheticObjectSource
+    src = SyntheticObjectSource(SettingsStore(), lambda f: None, has_demand=lambda: False)
+    src.start()
+    try:
+        results, errors = [], []
+
+        def ask():
+            try:
+                results.append(src.get_snapshot(4.0))
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+        threads = [threading.Thread(target=ask) for _ in range(3)]
+        t0 = time.time()
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors and len(results) == 3
+        assert time.time() - t0 < 3.0
+    finally:
+        src.stop()

@@ -235,10 +235,14 @@ class BaseSource:
 
     def get_snapshot(self, timeout=5.0):
         """Pide al hilo de captura un snapshot completo (color, depth, heat, intrinsics, depth_scale)."""
-        evt = threading.Event()
-        req = {"event": evt, "result": None, "error": None}
+        # Si ya hay una petición en curso (p. ej. el encuadre del escáner y una toma a la vez), se
+        # comparte su resultado: sobrescribirla dejaba a la primera esperando hasta el timeout.
         with self._capture_lock:
-            self._capture_req = req
+            req = self._capture_req
+            if req is None:
+                req = {"event": threading.Event(), "result": None, "error": None}
+                self._capture_req = req
+        evt = req["event"]
         if not evt.wait(timeout):
             with self._capture_lock:
                 if self._capture_req is req:
