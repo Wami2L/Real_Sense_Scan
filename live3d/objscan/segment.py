@@ -94,7 +94,7 @@ def _edge_fraction(Pb, vol):
     return float(np.mean((r > vol.radius_m * 0.93) | (Pb[:, 1] > vol.height_m * 0.95)))
 
 
-def frame_without_base(snap, sensor=D455, z_max=2.0):
+def frame_without_base(snap, sensor=D455, z_max=1.6):
     """Marco provisional sin hoja: plano de la mesa + objeto más cercano al centro de la imagen.
 
     Devuelve (T_cam_to_base, volumen ajustado al objeto) o (None, motivo).
@@ -105,15 +105,45 @@ def frame_without_base(snap, sensor=D455, z_max=2.0):
         return None, "Muy poca profundidad válida en la imagen"
     pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P)).voxel_down_sample(0.006)
     o3d.utility.random.seed(0)
-    plane, inl = pcd.segment_plane(distance_threshold=0.006, ransac_n=3, num_iterations=800)
-    n = np.asarray(plane[:3], np.float64)
-    d = float(plane[3])
-    if n @ np.array([0.0, -1.0, 0.0]) < 0:   # que la normal apunte "hacia arriba" (y de cámara hacia abajo)
-        n, d = -n, -d
-    if abs(n @ np.array([0.0, -1.0, 0.0])) < 0.3:
+    # En una habitación el plano más grande suele ser una pared: extraer planos uno tras otro
+    # hasta encontrar uno HORIZONTAL (normal hacia arriba de la imagen) con tamaño suficiente.
+    up_cam = np.array([0.0, -1.0, 0.0])
+    n = d = None
+    rest = pcd
+    for _ in range(8):
+        if len(rest.points) < 500:
+            break
+        # umbral acorde al ruido del sensor en esa zona (a 1,5 m ~5 mm de sigma)
+        plane, inl = rest.segment_plane(distance_threshold=0.01, ransac_n=3, num_iterations=1000)
+        cand = np.asarray(plane[:3], np.float64)
+        cd = float(plane[3])
+        if cand @ up_cam < 0:                 # que la normal apunte "hacia arriba"
+            cand, cd = -cand, -cd
+        if cand @ up_cam > 0.5 and len(inl) > 0.04 * len(pcd.points):
+            # afinar por mínimos cuadrados (RANSAC deja el plano algo inclinado, y con un volumen
+            # amplio una inclinación de 1-2° mete trozos de mesa como si fueran objeto)
+            Pd = np.asarray(pcd.points)
+            sel = np.abs(Pd @ cand + cd) < 0.01
+            for _ in range(3):
+                Q = Pd[sel]
+                c = Q.mean(0)
+                cand = np.linalg.svd(Q - c, full_matrices=False)[2][2]
+                if cand @ up_cam < 0:
+                    cand = -cand
+                cd = -float(cand @ c)
+                r = Pd @ cand + cd
+                sel = np.abs(r) < max(0.004, 2.5 * float(np.std(r[sel])))
+            n, d = cand, cd
+            break
+        rest = rest.select_by_index(inl, invert=True)
+    if n is None:
         return None, "No se encuentra una mesa bajo el objeto (¿la cámara mira de frente a una pared?)"
     h = P @ n + d                              # altura sobre la mesa
-    above = (h > 0.006) & (h < 0.5)
+    # por encima del ruido de la mesa a esa distancia (3 sigma): si no, el ruido "une" objetos
+    table = np.abs(h) < 0.01
+    z_table = float(np.median(P[table, 2])) if table.any() else 1.0
+    h_min = max(0.006, 3.0 * float(sensor.sigma_z(z_table)))
+    above = (h > h_min) & (h < 0.5)
     if above.sum() < 300:
         return None, "No hay nada encima de la mesa en la imagen"
     Pa = P[above]
@@ -143,8 +173,10 @@ def frame_without_base(snap, sensor=D455, z_max=2.0):
     T_base_to_cam[:3, 0], T_base_to_cam[:3, 1], T_base_to_cam[:3, 2], T_base_to_cam[:3, 3] = x, n, z, origin
     T = np.linalg.inv(T_base_to_cam)
     Pb = transform(T, obj)
+    # volumen generoso: desde una sola vista solo se ve la mitad del objeto y el centro estimado
+    # está desplazado hacia la cámara
     vol = WorkVolume(radius_m=float(np.clip(np.percentile(np.hypot(Pb[:, 0], Pb[:, 2]), 98) * 1.25, 0.04, 0.6)),
-                     height_m=float(np.clip(np.percentile(Pb[:, 1], 99) * 1.2, 0.03, 1.0)), floor_m=0.006)
+                     height_m=float(np.clip(np.percentile(Pb[:, 1], 99) * 1.2, 0.03, 1.0)), floor_m=h_min)
     return T, vol
 
 
