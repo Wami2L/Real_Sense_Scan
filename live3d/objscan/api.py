@@ -19,12 +19,14 @@ import os
 import subprocess
 
 import cv2
+import numpy as np
 from aiohttp import web
 
 from .base import LAYOUTS
 from .library import ROOT_DIR, Library
+from .rafaga import capture_burst
 from .segment import WorkVolume, analyze, preview_image
-from .session import ObjectScanSession
+from .session import ObjectScanSession, view_angles
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "objetos")
 
@@ -106,6 +108,13 @@ def setup_objscan_routes(app, library=None):
             return info, img
         info, img = await loop.run_in_executor(None, work)
         out = {k: v for k, v in info.items() if k not in ("mask", "T_cam_to_base", "snap")}
+        T = info.get("T_cam_to_base")
+        if T is not None and (info.get("base") or {}).get("ok"):
+            # para la captura automática: desde dónde mira la cámara y cuánto difiere de lo ya tomado
+            out["vista"] = view_angles(T)
+            out["vista"]["T"] = np.round(T, 5).tolist()
+            if s is not None:
+                out["vista"]["novedad_deg"] = round(s.novelty_deg(T), 1)
         out["imagen"] = _jpeg_data_url(img)
         out["dual"] = snap.get("cam1") is not None and snap.get("cam2") is not None
         if snap.get("degraded"):
@@ -130,7 +139,7 @@ def setup_objscan_routes(app, library=None):
             return web.json_response({"error": "Empieza un objeto primero"}, status=400)
         loop = asyncio.get_running_loop()
         try:
-            snap = await loop.run_in_executor(None, src.get_snapshot, 6.0)
+            snap = await loop.run_in_executor(None, capture_burst, src, 6, 6.0)
             res = await loop.run_in_executor(None, s.add_snapshot, snap)
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=422)

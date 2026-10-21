@@ -137,3 +137,10 @@ kbd { font-family: var(--mono); font-size: 0.68rem; background: rgba(5,7,13,.25)
   .layout { grid-template-columns: 1fr; grid-template-rows: 55vh auto; }
   .panel { border-left: 0; border-top: 1px solid var(--border); }
 }
+
+/* captura automática + cobertura */
+.autocap { display: flex; gap: 12px; align-items: center; margin: 4px 0 10px; }
+.autocap canvas { flex: none; width: 150px; height: 150px; border-radius: 50%; background: rgba(255,255,255,.03); }
+.autocap .help { margin: 6px 0 0; }
+.switch { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; font-weight: 600; }
+.switch input { width: 18px; height: 18px; accent-color: #38d9ff; }

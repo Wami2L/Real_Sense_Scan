@@ -67,7 +67,7 @@ def _scan(scene, tmp_path, use_base, steps):
     s = ObjectScanSession("Figura", use_base=use_base, base_dir=str(tmp_path), library=lib, log=lambda *a: None)
     for k in range(steps):
         s.add_snapshot(scene.render(orbit_pose(10, elevation_deg=30 if k % 2 == 0 else 45), k * 360 / steps))
-    s.finish(background=False)
+    s.finish(background=False, texture=False)   # la textura se prueba en test_textura.py
     assert s.error is None, s.error
     return s, lib
 
@@ -165,7 +165,7 @@ def test_dual_con_calibracion_desajustada_se_corrige_sin_fantasmas(tmp_path):
     for k in range(8):
         s.add_snapshot({"cam1": sc1.render(T1, k * 45), "cam2": sc2.render(T2, k * 45),
                         "extrinsics": np.linalg.inv(T1) @ T2 @ P})
-    s.finish(background=False)
+    s.finish(background=False, texture=False)
     info = s.result["correccion_calibracion_dual"]
     assert info["aplicada"] and info["muestras"] >= 2       # consenso mínimo del algoritmo
     assert 30 < info["mm"] < 70 and 3 < info["deg"] < 9          # mide el desajuste inyectado

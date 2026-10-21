@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/objetos-ui/objetos.css?v=1">
+  <link rel="stylesheet" href="/objetos-ui/objetos.css?v=2">
   <script type="importmap">
     { "imports": {
         "three": "/assets/vendor/three.module.min.js",
@@ -81,7 +81,15 @@
       <section class="step" data-step="2">
         <header><span class="num">2</span><h2>Tomas</h2><span class="state" id="s2-state"></span></header>
         <div class="body">
-          <p class="hint" id="consejo">Gira el objeto (o muévete alrededor) unos 30° entre tomas. Con 10–14 tomas y una vuelta completa suele bastar.</p>
+          <p class="hint" id="consejo">Gira la <b>hoja con el objeto encima</b> (o muévete alrededor), nunca el objeto solo.
+            A 0,4–0,6 m. Una vuelta a media altura y otra más alta: 16–24 tomas.</p>
+          <div class="autocap">
+            <canvas id="cobertura" width="150" height="150" title="Vistas tomadas (puntos) y vista actual (anillo), vistas desde arriba"></canvas>
+            <div>
+              <label class="switch"><input type="checkbox" id="auto" checked> <span>Captura automática</span></label>
+              <p class="help" id="auto-estado">Gira la hoja despacio: dispara sola cuando la vista es nueva y todo está quieto.</p>
+            </div>
+          </div>
           <div class="actions">
             <button id="btn-tomar" class="primary big">Tomar foto <kbd>Espacio</kbd></button>
             <button id="btn-deshacer" class="ghost">Deshacer</button>
@@ -146,6 +154,6 @@
     </article>
   </template>
 
-  <script type="module" src="/objetos-ui/objetos.js?v=2"></script>
+  <script type="module" src="/objetos-ui/objetos.js?v=3"></script>
 </body>
 </html>

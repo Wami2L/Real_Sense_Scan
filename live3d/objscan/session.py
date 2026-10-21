@@ -8,6 +8,8 @@ Poses de cada vista (de más a menos fiable):
   referencia  primera vista sin base: define un marco provisional sobre la mesa
 
 Todas se refinan con ICP sobre el OBJETO (nunca sobre el fondo) contra el resto de vistas.
+La geometría sale del TSDF (profundidad, a escala) y el color de una textura UV horneada con
+las fotos de cada toma (textura.py): la D455 da la forma rápido y las fotos, el detalle.
 Una pose por base solo acepta correcciones pequeñas; la de calibración se corrige con más
 libertad (así una calibración dual imperfecta no deja fantasmas).
 """
@@ -36,6 +38,54 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 
 def _rot_deg(R):
     return float(np.degrees(np.arccos(np.clip((np.trace(R[:3, :3]) - 1) / 2, -1, 1))))
+
+
+def _rel_to_root(path):
+    """Ruta de la sesión para el manifiesto: relativa al proyecto si está dentro (Saves/...),
+    absoluta si no (p. ej. los tests). La biblioteca la usa para re-texturizar."""
+    path = os.path.abspath(path)
+    root = os.path.abspath(ROOT_DIR)
+    try:
+        inside = os.path.commonpath([path.lower(), root.lower()]) == root.lower()
+    except ValueError:  # otra unidad
+        inside = False
+    return os.path.relpath(path, root).replace("\\", "/") if inside else path
+
+
+def _skirt_mask(V, band=(0.015, 0.05), low_h=0.014, cell=0.003, margin=0.012):
+    """Vértices de la "falda" pegada al suelo: trozos de hoja o de mesa que el TSDF une a la base
+    del objeto (píxeles mezclados en el borde). La huella del objeto se toma de su sección algo más
+    arriba (band) y se agranda `margin`; lo que está a menos de `low_h` del suelo y fuera de esa
+    huella, sobra. Objetos más anchos abajo que a 1,5-5 cm conservan su base hasta `margin`."""
+    sel = (V[:, 1] > band[0]) & (V[:, 1] < band[1])
+    if sel.sum() < 100:
+        return np.zeros(len(V), bool)
+    lo = V[:, [0, 2]].min(0) - 2 * margin
+    ij = np.floor((V[:, [0, 2]] - lo) / cell).astype(int)
+    shape = tuple(ij.max(0) + 1)
+    occ = np.zeros(shape, np.uint8)
+    occ[ij[sel, 0], ij[sel, 1]] = 1
+    k = 2 * int(np.ceil(margin / cell)) + 1
+    occ = cv2.morphologyEx(occ, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    cnts, _ = cv2.findContours(occ, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    fill = np.zeros_like(occ)
+    cv2.drawContours(fill, cnts, -1, 1, -1)                 # la sección es un anillo: rellenarlo
+    fill = cv2.dilate(fill, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    return (V[:, 1] < low_h) & (fill[ij[:, 0], ij[:, 1]] == 0)
+
+
+def view_dir(T):
+    """Dirección unitaria del centro de la base hacia la cámara (marco base)."""
+    c = np.asarray(T)[:3, 3]
+    return c / max(np.linalg.norm(c), 1e-9)
+
+
+def view_angles(T):
+    """Azimut y elevación (°) de la cámara vista desde el centro de la base, y distancia (m)."""
+    c = np.asarray(T)[:3, 3]
+    return {"az": round(float(np.degrees(np.arctan2(c[0], c[2]))), 1),
+            "el": round(float(np.degrees(np.arctan2(c[1], np.hypot(c[0], c[2])))), 1),
+            "dist_m": round(float(np.linalg.norm(c)), 3)}
 
 
 def _thumb(bgr, width=200):
@@ -78,7 +128,8 @@ class ObjView:
     def summary(self):
         return {"index": self.idx, "toma": self.shot, "camara": self.cam, "etiqueta": self.label,
                 "origen_pose": self.source, "base": self.base_info, "puntos": 0 if self.pts_cam is None else len(self.pts_cam),
-                "calidad": self.quality, "thumb": self.thumb}
+                "calidad": self.quality, "thumb": self.thumb,
+                "angulos": view_angles(self.T) if self.T is not None else None}
 
 
 def _prep(pcd, voxel):
@@ -132,7 +183,7 @@ class ObjectScanSession:
     MAX_SHOTS = 48
 
     def __init__(self, name="Objeto", layout="A3", volume=None, use_base=True, base_dir=ROOT_DIR,
-                 library=None, log=print, sensor=D455, save_views=True):
+                 library=None, log=print, sensor=segment.D455_OBJ, save_views=True):
         self.name = name or "Objeto"
         self.layout = LAYOUTS.get(layout, LAYOUTS["A3"])
         self.volume = volume or segment.WorkVolume()
@@ -142,8 +193,8 @@ class ObjectScanSession:
         self.library = library or Library()
         date = time.strftime("%Y-%m-%d")
         self.id = time.strftime("objeto_%H%M%S")
-        self.rel_dir = f"Saves/{date}/{self.id}"
         self.dir = os.path.join(base_dir, "Saves", date, self.id)
+        self.rel_dir = _rel_to_root(self.dir)
         self.save_views = save_views
         self.views = []
         self.shots = 0
@@ -156,6 +207,42 @@ class ObjectScanSession:
         self.cam2_corr = np.eye(4)    # corrección común de la calibración dual (marco de la Cam 2)
         self.calib_info = None
         self._lock = threading.Lock()
+
+    @classmethod
+    def from_folder(cls, folder, name=None, library=None, log=print, volume=None):
+        """Sesión ya capturada (Saves/<fecha>/objeto_HHMMSS) lista para volver a procesar con el
+        código actual: las vistas guardadas (color, profundidad, pose de la toma) sin la cámara."""
+        views = []
+        for d in sorted(os.listdir(folder)):
+            vd = os.path.join(folder, d)
+            if d.startswith("vista_") and os.path.isfile(os.path.join(vd, "vista.json")):
+                with open(os.path.join(vd, "vista.json"), encoding="utf-8") as f:
+                    views.append((vd, json.load(f)))
+        if not views:
+            raise ValueError(f"No hay vistas guardadas en {folder}")
+        j0 = views[0][1]
+        if volume is None and j0.get("volumen"):
+            volume = segment.WorkVolume(j0["volumen"]["radio_cm"] / 100, j0["volumen"]["altura_cm"] / 100)
+        s = cls(name or os.path.basename(folder), layout=j0.get("hoja", "A3"), volume=volume,
+                use_base=j0.get("usar_base", True), library=library, log=log, save_views=False)
+        s.dir = os.path.abspath(folder)
+        s.rel_dir = _rel_to_root(s.dir)
+        for vd, j in views:
+            color = cv2.imread(os.path.join(vd, "color.jpg"))
+            depth = cv2.imread(os.path.join(vd, "profundidad.png"), cv2.IMREAD_UNCHANGED)
+            if color is None or depth is None or not j.get("T_cam_a_base"):
+                continue
+            snap = {"color": cv2.cvtColor(color, cv2.COLOR_BGR2RGB), "depth": depth, "intrinsics": j["intrinsics"],
+                    "depth_scale": j["depth_scale"], "burst": j.get("rafaga", 1)}
+            v = ObjView(len(s.views), j.get("toma", len(s.views)), j.get("camara", "cam1"), snap)
+            v.T, v.source, v.base_info = np.array(j["T_cam_a_base"], np.float64), j.get("origen_pose") or "base", j.get("base")
+            s._segment(v)
+            if v.pts_cam is not None and len(v.pts_cam) >= 400:
+                s.views.append(v)
+        s.shots = len({v.shot for v in s.views})
+        if s.views:
+            s.voxel = s._auto_voxel(s.views[0])
+        return s
 
     # ------------------------------------------------------------------ #
     # Captura
@@ -257,6 +344,17 @@ class ObjectScanSession:
         if v.pts_cam is None or len(v.pts_cam) < 400:
             v.quality["motivo"] = "casi no hay objeto dentro del volumen de trabajo"
             return
+        same = self._same_view(v)
+        if same is not None:
+            w, overlap = same
+            if overlap < 0.6:
+                v.quality["motivo"] = (f"misma vista que la {w.label.lower()} pero el objeto se movió sobre la hoja: "
+                                       "gira la HOJA con el objeto encima (no el objeto solo) o mueve la cámara")
+            else:
+                v.quality["motivo"] = (f"misma vista que la {w.label.lower()}: gira la hoja con el objeto ~30° "
+                                       "o mueve la cámara antes de la siguiente toma")
+            v.T = None
+            return
         if self.voxel == 0.003:
             self.voxel = self._auto_voxel(v)
         self._refine(v, siblings)
@@ -350,9 +448,44 @@ class ObjectScanSession:
         seg = segment.segment_with_base(v.snap, v.T, self.volume, sensor=self.sensor)
         v.mask, v.pts_cam, v.cols = seg["mask"], seg["points_cam"], seg["colors"]
 
+    def novelty_deg(self, T, cam="cam1"):
+        """Separación angular (°) entre la dirección de la cámara T (cámara -> base) y la de la
+        vista ya tomada más parecida. Grande = vista nueva que merece una toma."""
+        dirs = [view_dir(w.T) for w in self.views if w.cam == cam and w.T is not None and w.source == "base"]
+        if not dirs:
+            return 180.0
+        d = view_dir(T)
+        return float(np.degrees(np.arccos(np.clip(max(float(d @ e) for e in dirs), -1, 1))))
+
+    def _same_view(self, v, max_mm=15.0, max_deg=4.0):
+        """(vista anterior, solape del objeto) si v se tomó desde la misma pose respecto a la base
+        que otra vista de la misma cámara; None si es una vista nueva. Con la base, una vista
+        nueva exige mover la cámara o girar la hoja: si la pose no cambia, o la toma sobra o el
+        objeto giró sobre la hoja (y fundirlas lo convertiría en un borrón)."""
+        if v.source != "base":
+            return None
+        for w in self.views:
+            if w.cam != v.cam or w.source != "base" or w.T is None:
+                continue
+            d = np.linalg.inv(w.T) @ v.T
+            if np.linalg.norm(d[:3, 3]) * 1000 > max_mm or _rot_deg(d) > max_deg:
+                continue
+            a = segment.transform(v.T, v.pts_cam)
+            b = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(segment.transform(w.T, w.pts_cam)))
+            tree = o3d.geometry.KDTreeFlann(b)
+            step = max(1, len(a) // 3000)
+            near = [tree.search_knn_vector_3d(p, 1)[2][0] for p in a[::step]]
+            overlap = float(np.mean(np.sqrt(near) < max(0.004, 2.5 * self.voxel)))
+            return w, overlap
+        return None
+
     def _auto_voxel(self, v):
+        """Vóxel según el ruido real de la vista: σz(z) de la D455 reducido por la ráfaga de cuadros
+        (no del todo: parte del ruido es fijo por píxel). 1.5-4 mm."""
         z = float(np.median(v.pts_cam[:, 2]))
-        return float(np.clip(2.0 * self.sensor.sigma_z(z) + 0.0015, 0.002, 0.006))
+        n = max(1, int(v.snap.get("burst", 1)))
+        sigma = self.sensor.sigma_z(z) * (1.0 if n == 1 else 1.4 / np.sqrt(n))
+        return float(np.clip(1.5 * sigma + 0.001, 0.0015, 0.004))
 
     def _update_scale(self, ratio):
         self._scales.append(float(ratio))
@@ -497,14 +630,17 @@ class ObjectScanSession:
         q = v.quality
         if len(self.views) <= len(new):
             base = "con base de marcadores" if v.source == "base" else "sin base (alineado por geometría)"
+            if v.source == "base":
+                return (f"Primera toma guardada {base}. Gira la HOJA con el objeto encima ~30° (o muévete "
+                        "alrededor) y toma la siguiente. No gires el objeto solo.")
             return f"Primera toma guardada {base}. Gira el objeto (o muévete) ~30° y toma la siguiente."
         fit = q.get("fitness")
         if fit is None:
             return "Toma guardada."
         pct = round(fit * 100)
         if v.source == "base":
-            return (f"Encaje {pct} % con lo ya escaneado (pose por marcadores). Sigue girando ~30°; "
-                    "al completar la vuelta, inclina un poco la cámara para ver la parte de arriba.")
+            return (f"Encaje {pct} % con lo ya escaneado (pose por marcadores). Sigue girando la hoja ~30°; "
+                    "al completar la vuelta, sube o baja la cámara y da otra vuelta para ver arriba y los lados.")
         if fit >= 0.6:
             return f"Encaje {pct} %: bien. Gira ~25-30° más."
         return f"Encaje {pct} %: justo. Gira menos (~15-20°) en la próxima toma."
@@ -532,7 +668,7 @@ class ObjectScanSession:
     # ------------------------------------------------------------------ #
     # Procesado
     # ------------------------------------------------------------------ #
-    def finish(self, background=True, target_triangles=150000):
+    def finish(self, background=True, target_triangles=150000, texture=True):
         with self._lock:
             if self.state != "capturing":
                 raise RuntimeError("La sesión ya se está procesando o terminó.")
@@ -540,15 +676,16 @@ class ObjectScanSession:
                 raise RuntimeError("Hacen falta al menos 2 tomas válidas.")
             self.state, self.error, self.progress, self.stage = "processing", None, 0.0, "Preparando..."
         if background:
-            threading.Thread(target=self._process, args=(target_triangles,), name="ObjScan", daemon=True).start()
+            threading.Thread(target=self._process, args=(target_triangles, texture), name="ObjScan",
+                             daemon=True).start()
         else:
-            self._process(target_triangles)
+            self._process(target_triangles, texture)
 
     def _stage(self, text, p):
         self.stage, self.progress = text, float(p)
         self.log(f"[Objeto] {int(p * 100):3d}% {text}")
 
-    def _process(self, target_triangles):
+    def _process(self, target_triangles, texture=True):
         t0 = time.time()
         try:
             # a) poses: primero las independientes de la calibración (marcadores o geometría),
@@ -572,9 +709,19 @@ class ObjectScanSession:
             mesh, pts = self._integrate()
 
             # c) limpieza, decimado y pivote
-            self._stage("Limpiando malla", 0.75)
+            self._stage("Limpiando malla", 0.7)
             mesh, offset = self._clean(mesh, target_triangles)
             pts.translate(offset)
+
+            # d) textura fotográfica (atlas UV + fotos de las tomas)
+            tex, tex_info = None, None
+            if texture:
+                self._stage("Texturizando con las fotos", 0.78)
+                try:
+                    mesh, tex, tex_info = self._texture(mesh, offset)
+                except Exception as e:  # noqa: BLE001  (sin textura el objeto sigue valiendo)
+                    traceback.print_exc()
+                    tex_info = {"error": str(e)}
 
             # d) biblioteca
             self._stage("Guardando en la biblioteca", 0.9)
@@ -589,9 +736,12 @@ class ObjectScanSession:
                 "voxel_mm": round(self.voxel * 1000, 2),
                 "correccion_calibracion_dual": self.calib_info,
                 "pivote_desplazado_m": [round(float(x), 4) for x in offset],
+                "rafaga_cuadros": int(np.median([v.snap.get("burst", 1) for v in self.views])),
+                "volumen": self.volume.public(),
+                "textura": tex_info,
                 "tiempo_proceso_s": round(time.time() - t0, 1),
             }
-            man = self.library.create(self.name, mesh, pts, meta)
+            man = self.library.create(self.name, mesh, pts, meta, texture=tex)
             if self.save_views and os.path.isdir(self.dir):
                 with open(os.path.join(self.dir, "resumen_objeto.json"), "w", encoding="utf-8") as f:
                     json.dump({"objeto": man["id"], **meta,
@@ -634,6 +784,14 @@ class ObjectScanSession:
         mesh = vol.extract_triangle_mesh()
         return mesh, pts.voxel_down_sample(self.voxel)
 
+    def _texture(self, mesh, offset):
+        from .textura import TexView, bake
+        To = np.eye(4)
+        To[:3, 3] = offset
+        views = [TexView(v.snap["color"], v.snap["intrinsics"], To @ v.T, v.mask)
+                 for v in self.views if not v.excluded and v.T is not None]
+        return bake(mesh, views, log=lambda m: self.log(f"[Objeto] textura: {m}"))
+
     def _clean(self, mesh, target_triangles):
         mesh.remove_degenerate_triangles()
         mesh.remove_duplicated_vertices()
@@ -644,6 +802,7 @@ class ObjectScanSession:
         # fuera lo que queda por debajo del papel (restos de la mesa)
         low = V[:, 1] < self.volume.floor_m * 0.5
         mesh.remove_vertices_by_mask(low)
+        mesh.remove_vertices_by_mask(_skirt_mask(np.asarray(mesh.vertices)))
         # componentes: quedarse con el objeto (la mayor y las que pesen > 10 % de ella)
         clusters, counts, _ = mesh.cluster_connected_triangles()
         clusters, counts = np.asarray(clusters), np.asarray(counts)
@@ -671,10 +830,14 @@ class ObjectScanSession:
         cv2.imwrite(os.path.join(folder, "color.jpg"), cv2.cvtColor(s["color"], cv2.COLOR_RGB2BGR),
                     [cv2.IMWRITE_JPEG_QUALITY, 92])
         cv2.imwrite(os.path.join(folder, "profundidad.png"), s["depth"])
+        if v.mask is not None:
+            cv2.imwrite(os.path.join(folder, "mascara.png"), v.mask.astype(np.uint8) * 255)
         with open(os.path.join(folder, "vista.json"), "w", encoding="utf-8") as f:
             json.dump({"intrinsics": s["intrinsics"], "depth_scale": s["depth_scale"], "toma": v.shot,
                        "camara": v.cam, "origen_pose": v.source, "T_cam_a_base": v.T.tolist(),
-                       "base": v.base_info}, f, indent=2, ensure_ascii=False)
+                       "base": v.base_info, "rafaga": int(s.get("burst", 1)),
+                       "rafaga_cambio": s.get("burst_cambio"), "volumen": self.volume.public(),
+                       "hoja": self.layout.name, "usar_base": self.use_base}, f, indent=2, ensure_ascii=False)
 
     def summary(self):
         return {"id": self.id, "nombre": self.name, "dir": self.rel_dir, "state": self.state,

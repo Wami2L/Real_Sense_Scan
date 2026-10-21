@@ -1,6 +1,6 @@
 // Visor del resultado: lee el mismo modelo.rsm que descarga Unity y lo muestra con Three.js.
 // RSM está en la convención de Unity (zurdo): aquí se vuelve a diestra (z -> -z) y se invierte
-// el orden de los triángulos.
+// el orden de los triángulos. v2: UV por vértice + textura (JPEG) al final.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
@@ -11,10 +11,12 @@ export function parseRSM(buf) {
   const nv = dv.getUint32(8, true), ni = dv.getUint32(12, true), flags = dv.getUint32(16, true);
   let o = 44;
   const pos = new Float32Array(buf.slice(o, o + nv * 12)); o += nv * 12;
-  let nrm = null, col = null;
+  let nrm = null, col = null, uv = null, tex = null;
   if (flags & 1) { nrm = new Float32Array(buf.slice(o, o + nv * 12)); o += nv * 12; }
   if (flags & 2) { col = new Uint8Array(buf.slice(o, o + nv * 4)); o += nv * 4; }
-  const idx = new Uint32Array(buf.slice(o, o + ni * 4));
+  if (flags & 4) { uv = new Float32Array(buf.slice(o, o + nv * 8)); o += nv * 8; }
+  const idx = new Uint32Array(buf.slice(o, o + ni * 4)); o += ni * 4;
+  if (flags & 8) { const n = dv.getUint32(o, true); tex = new Blob([buf.slice(o + 4, o + 4 + n)], { type: 'image/jpeg' }); }
   for (let i = 2; i < pos.length; i += 3) pos[i] = -pos[i];
   if (nrm) for (let i = 2; i < nrm.length; i += 3) nrm[i] = -nrm[i];
   for (let i = 0; i < idx.length; i += 3) { const t = idx[i]; idx[i] = idx[i + 2]; idx[i + 2] = t; }
@@ -22,9 +24,11 @@ export function parseRSM(buf) {
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   if (nrm) g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
   if (col) g.setAttribute('color', new THREE.BufferAttribute(col, 4, true));
+  if (uv) g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   g.setIndex(new THREE.BufferAttribute(idx, 1));
   if (!nrm) g.computeVertexNormals();
   g.computeBoundingBox();
+  g.userData.texture = tex;   // Blob de la textura (v2) o null
   return g;
 }
 
@@ -56,8 +60,18 @@ export class RSMViewer {
     if (!r.ok) throw new Error(`no se pudo descargar el modelo (${r.status})`);
     const g = parseRSM(await r.arrayBuffer());
     if (this.mesh) { this.scene.remove(this.mesh); this.mesh.geometry.dispose(); }
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: !!g.getAttribute('color'), roughness: 0.75, metalness: 0.0,
-                                                 color: g.getAttribute('color') ? 0xffffff : 0xb8c4d6 });
+    let map = null;
+    if (g.userData.texture && g.getAttribute('uv')) {
+      const bmp = await createImageBitmap(g.userData.texture, { imageOrientation: 'flipY' });
+      map = new THREE.Texture(bmp);
+      map.flipY = false;               // ya volteada al decodificar (ImageBitmap ignora flipY)
+      map.colorSpace = THREE.SRGBColorSpace;
+      map.anisotropy = 4;
+      map.needsUpdate = true;
+    }
+    const useVC = !map && !!g.getAttribute('color');
+    const mat = new THREE.MeshStandardMaterial({ map, vertexColors: useVC, roughness: 0.8, metalness: 0.0,
+                                                 color: map || useVC ? 0xffffff : 0xb8c4d6 });
     this.mesh = new THREE.Mesh(g, mat);
     this.scene.add(this.mesh);
     const bb = g.boundingBox, size = new THREE.Vector3(), c = new THREE.Vector3();

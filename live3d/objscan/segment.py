@@ -15,6 +15,13 @@ import numpy as np
 import open3d as o3d
 
 from ..alignment import D455
+
+import dataclasses
+
+# A 848x480 la D455 mide desde ~0.34 m (Min-Z = fx·B/126 px de disparidad = 447·0.095/126); el
+# 0.52 m del modelo general es el de 1280x720. Para objetos conviene acercarse (0.4-0.6 m: el
+# ruido baja con z² y la foto gana detalle). La cámara ya devuelve 0 donde no puede medir.
+D455_OBJ = dataclasses.replace(D455, z_min_m=0.30)
 from .base import estimate_pose
 
 
@@ -28,7 +35,7 @@ class WorkVolume:
         return {"radio_cm": round(self.radius_m * 100, 1), "altura_cm": round(self.height_m * 100, 1)}
 
 
-def pixel_points(depth_u16, depth_scale, intr, z_max=3.0, sensor=D455):
+def pixel_points(depth_u16, depth_scale, intr, z_max=3.0, sensor=D455_OBJ):
     """Puntos 3D (marco de color, profundidad alineada) para cada píxel válido + índices."""
     z = depth_u16.astype(np.float64) * depth_scale
     valid = (z >= sensor.z_min_m) & (z <= z_max)
@@ -71,7 +78,7 @@ def _largest_cluster(P, eps=0.012, min_points=20, prefer=None):
     return np.unique(keep[keep >= 0])
 
 
-def segment_with_base(snap, T_cam_to_base, vol, sensor=D455):
+def segment_with_base(snap, T_cam_to_base, vol, sensor=D455_OBJ):
     """Objeto dentro del volumen de trabajo. Devuelve dict con máscara, puntos (marco base) y colores."""
     intr = snap["intrinsics"]
     P, vv, uu = pixel_points(snap["depth"], snap["depth_scale"], intr, sensor=sensor)
@@ -94,7 +101,7 @@ def _edge_fraction(Pb, vol):
     return float(np.mean((r > vol.radius_m * 0.93) | (Pb[:, 1] > vol.height_m * 0.95)))
 
 
-def frame_without_base(snap, sensor=D455, z_max=1.6):
+def frame_without_base(snap, sensor=D455_OBJ, z_max=1.6):
     """Marco provisional sin hoja: plano de la mesa + objeto más cercano al centro de la imagen.
 
     Devuelve (T_cam_to_base, volumen ajustado al objeto) o (None, motivo).
@@ -188,7 +195,7 @@ def object_extent(Pb):
             "alto_cm": round(float(hi[1] - max(lo[1], 0)) * 100, 1)}
 
 
-def analyze(snap, layout, vol, use_base=True, scale=1.0, sensor=D455):
+def analyze(snap, layout, vol, use_base=True, scale=1.0, sensor=D455_OBJ):
     """Diagnóstico del encuadre de UNA vista: base, objeto, tamaño, distancia y avisos.
     Rectifica la lente primero; devuelve el snapshot rectificado en out["snap"]."""
     from .optica import rectify_snapshot
@@ -236,10 +243,11 @@ def analyze(snap, layout, vol, use_base=True, scale=1.0, sensor=D455):
         out["ok"] = True
     if seg["edge_frac"] > 0.08:
         out["warnings"].append("El objeto toca el borde del volumen de trabajo: amplía el radio o la altura.")
-    if out.get("distance_m") and out["distance_m"] < sensor.z_min_m + 0.08:
-        out["warnings"].append(f"Demasiado cerca: la D455 no mide por debajo de {sensor.z_min_m:.2f} m.")
-    if out.get("distance_m") and out["distance_m"] > 1.2:
-        out["warnings"].append("Lejos: acércate a 0,6-0,9 m para más detalle (el ruido crece con la distancia²).")
+    if out.get("distance_m") and out["distance_m"] < 0.36:
+        out["warnings"].append("Demasiado cerca: a 848x480 la D455 no mide por debajo de ~0,34 m.")
+    if out.get("distance_m") and out["distance_m"] > 0.8:
+        out["warnings"].append("Lejos: acércate a 0,4-0,6 m para más detalle (el ruido crece con la distancia² "
+                               "y la foto pierde resolución).")
     ext = out.get("extent")
     if ext and max(ext["ancho_cm"], ext["alto_cm"], ext["fondo_cm"]) < 6:
         out["warnings"].append("Objeto muy pequeño para la resolución de la D455 (< 6 cm): saldrá poco detalle.")

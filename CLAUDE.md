@@ -33,16 +33,25 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
 
 ### Escáner de objetos (prioridad actual, plan 13) — `live3d/objscan/`
 - Ruta: escanear en `/objetos` → (Blender opcional) → publicar → Unity (VR ScanWorld) lo construye con partículas.
-- `base.py`: hoja de marcadores ArUco **ids 10-17** (los 0-3 son de calibración); pose de cámara por PnP con la
-  geometría de la hoja y escala medida con la profundidad. PDFs en `imprimibles/` y en `/objetos-ui/base_escaneo_A3.pdf`.
+- `base.py`: hoja de marcadores ArUco **ids 10-17** (los 0-3 son de calibración). Pose: PnP y luego
+  `refine_with_plane` (plano de la hoja por profundidad ∩ rayos de las esquinas + Umeyama = pose y escala real de
+  la impresión; el PnP solo, con marcadores pequeños, oscila cm). Varias copias de la hoja: `group_sheets` (usa
+  la más horizontal). PDFs en `imprimibles/` y en `/objetos-ui/base_escaneo_A3.pdf`.
 - Marco "base" del objeto: metros, **Y arriba**, diestro, pivote en el centro de la base. Blender: forward -Z / up Y.
   Unity (`.rsm`): z → -z y orden de triángulos invertido (ya hecho al escribir el archivo).
 - `optica.py`: rectifica color+profundidad (coeficientes de la lente en las intrínsecas del snapshot) ANTES de nada.
 - `segment.py`: objeto = volumen de trabajo (cilindro sobre la base) o, sin base, plano de la mesa + grupo central.
+  Usa `D455_OBJ` (Min-Z 0,30 m: a 848×480 la D455 mide desde ~0,34 m; el 0,52 de `alignment.D455` es de 1280×720).
+- `rafaga.py`: cada toma = mediana de 6 cuadros de profundidad (descarta los movidos). `api.tomar` usa `capture_burst`.
 - `session.py`: poses base > calibración (Cam 2) > icp > referencia. ICP **point-to-plane** (el ICP con color sesga
-  con luz fija y objeto que gira). Dual: UNA corrección común de la calibración con todas las tomas (consenso) y la
-  Cam 2 se descarta si no encaja. TSDF **uniforme** solo del objeto. Resultado a `Saves/objetos/<id>/`.
-- `library.py` (manifiesto `objeto.json`, `objeto_limpio.ply` de Blender gana), `rsm.py` (formato Unity),
+  con fija y objeto que gira). Dual: UNA corrección común de la calibración con todas las tomas (consenso) y la
+  Cam 2 se descarta si no encaja. TSDF **uniforme** solo del objeto, sin la "falda" de papel (`_skirt_mask`).
+  Rechaza una toma desde la misma pose que otra (objeto girado sobre la hoja quieta). `from_folder` reprocesa
+  una sesión guardada (`tools/reprocesar_objeto.py`). Resultado a `Saves/objetos/<id>/`.
+- `textura.py`: atlas UV + fotos de las tomas → textura 2048² (**una vista por isla**: mezclar vistas duplica
+  detalles en superficies negras/brillantes). `split_by_uv` para el RSM.
+- `library.py` (manifiesto `objeto.json`, `objeto.obj`+`textura.jpg`, `objeto_limpio.ply` de Blender gana y se
+  re-texturiza con las fotos de la sesión), `rsm.py` (formato Unity; v2 = UV + textura JPEG),
   `sintetico.py` + `fuente.py` (escena con verdad de referencia; `python app.py --synthetic-object`).
 
 - `live3d/capture.py`: fuentes `RealSenseSource`, `DualRealSenseSource`, `SyntheticSource`, `SyntheticDualSource`.
@@ -73,8 +82,9 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
 
 ## Proyecto Unity asociado
 - `C:\Users\Usuario\Documents\Proyectos Unity\VR ScanWorld` — Unity **6000.3.8f1**, URP 17.3, solo Input System nuevo,
-  espacio lineal. Git **local** propio (sin remoto). Sin OpenXR/Meta todavía.
-- Paquete `Assets/ScanWorld/` (ver su `LEEME.md`): `ScanLinkClient` (consulta 5010), `RsmLoader`, `ScanGallery`
+  espacio lineal. Git propio: https://github.com/Wami2L/Unity_Realsense_Reciever (rama `main`). Sin OpenXR/Meta todavía.
+- Paquete `Assets/ScanWorld/` (ver su `LEEME.md`): `ScanLinkClient` (consulta 5010), `RsmLoader` (RSM v1/v2 con
+  textura → `RsmModel`), `ScanGallery`
   (pedestales), `ScanBuildEffect` + shaders URP `ScanWorld/BuildParticles` y `ScanWorld/BuildSolid` (sin VFX Graph ni
   geometry shaders), importador `.rsm`, menú ScanWorld. Escena `Assets/ScanWorld/Scenes/ScanWorld.unity`.
 - Verificar sin abrir el editor (Unity cerrado): `Unity.exe -batchmode -projectPath <proyecto> -executeMethod
@@ -101,6 +111,7 @@ python app.py --synthetic --dual   # desarrollo sin cámaras
 python app.py --synthetic-object   # escáner de objetos sin cámaras (plato giratorio simulado)
 python -m live3d.unity_link        # enlace con Unity (5010); --red para otros equipos (token)
 python tools/generar_base_escaneo.py --hoja A3   # hoja imprimible de la base de escaneo
+python tools/reprocesar_objeto.py Saves/<fecha>/objeto_HHMMSS [--reemplazar <id>]  # rehacer un objeto sin cámara
 python -m live3d.tools.probe_client  # cliente WS de prueba
 python -m pip install -r requirements-dev.txt
 python -m pytest                   # tests de humo (lanzan su propio servidor sintético en un puerto libre)
@@ -116,4 +127,5 @@ python test_fotogrametria/test_cli.py --all-saves # motor de alineación sobre l
 servidor con el estudio como interfaz principal (fases U0–U5).
 `documentacion/planes/12_Plan_Alineacion_Guiada_Marcadores_y_Puntos.md` — alineación guiada (implementada; §6 = qué refinar).
 `documentacion/planes/13_Plan_Escaner_de_Objetos_a_Unity.md` — **prioridad**: escáner de objetos → Blender → Unity.
+`documentacion/planes/14_Plan_Escaneo_Texturizado_RealSense.md` — geometría RealSense + textura fotográfica (vigente).
 Guía de uso: `documentacion/GUIA_ESCANER_OBJETOS.md`.

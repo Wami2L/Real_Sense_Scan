@@ -93,3 +93,8 @@ En esta carpeta se recopilan las propuestas arquitectónicas, planes técnicos, 
 * Cómo funciona la alineación (evidencia → hipótesis → ICP → consistencia) y por qué SIFT falla con cámaras a ~65°.
 * Marcadores ArUco con esquinas 3D por plano del papel, puntos fijados a mano con Kabsch robusto, mapa de error, multi-toma e historial con deshacer.
 * Asistente de 6 pasos, detalle explicado, glosario y procedimiento recomendado de calibración.
+
+### 14. [14_Plan_Escaneo_Texturizado_RealSense.md](14_Plan_Escaneo_Texturizado_RealSense.md)
+* Por qué el primer escaneo real salió sin forma (objeto girado sobre la hoja quieta, pose inestable lejos, vóxel grueso, Min-Z mal puesto).
+* RealSense para la forma + textura UV con las fotos (una vista por isla del atlas); RealityScan, COLMAP y color map optimization evaluados.
+* Pose por plano de profundidad + Umeyama, ráfaga de 6 cuadros, captura automática, RSM v2 con textura y Unity texturizado.

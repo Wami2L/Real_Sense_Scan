@@ -113,6 +113,8 @@ async function framingLoop() {
       $('encuadre').src = d.imagen;
       $('stage-empty').classList.add('hidden');
       renderChips(d);
+      drawCoverage(d.vista);
+      autoCapture(d);
     } catch (e) {
       $('stage-empty').textContent = `Sin imagen de la cámara: ${e.message}`;
       $('stage-empty').classList.remove('hidden');
@@ -133,11 +135,59 @@ function renderChips(d) {
   else c.push(chip('Base', 'sin base', null));
   if (d.extent) c.push(chip('Objeto', `${d.extent.ancho_cm}×${d.extent.fondo_cm}×${d.extent.alto_cm} cm`, d.ok));
   else c.push(chip('Objeto', 'no detectado', false));
-  if (d.distance_m) c.push(chip('Distancia', `${d.distance_m} m`, d.distance_m >= 0.55 && d.distance_m <= 1.1));
+  if (d.distance_m) c.push(chip('Distancia', `${d.distance_m} m`, d.distance_m >= 0.36 && d.distance_m <= 0.8));
   if (d.base?.scale_ratio && Math.abs(d.base.scale_ratio - 1) > 0.015) c.push(chip('Escala hoja', `${(d.base.scale_ratio * 100).toFixed(1)} %`, false));
   if (d.simulada) c.push(chip('Cámara', 'simulada', null));
   $('chips').innerHTML = c.join('');
   $('warnings').innerHTML = (d.warnings || []).map((w) => `<li>${esc(w)}</li>`).join('');
+}
+
+// ---------------- captura automática ----------------
+// Dispara cuando la vista es nueva (lejos de las ya tomadas) y la escena lleva quieta un instante.
+const AUTO_MIN_SEP_DEG = 22;
+let lastVista = null;
+let stableSince = 0;
+function autoCapture(d) {
+  const st = $('auto-estado');
+  if (step !== 2 || !session || !$('auto').checked) { lastVista = null; return; }
+  const v = d.vista;
+  if (!v || !d.ok) { lastVista = null; st.textContent = d.ok ? 'Necesita ver la hoja de marcadores.' : 'No veo el objeto dentro del volumen.'; return; }
+  const moved = !lastVista || Math.abs(v.az - lastVista.az) > 1.2 || Math.abs(v.el - lastVista.el) > 1.2 ||
+                Math.abs(v.dist_m - lastVista.dist_m) > 0.008;
+  const now = performance.now();
+  if (moved) stableSince = now;
+  lastVista = v;
+  const nov = v.novedad_deg ?? 180;
+  if (nov < AUTO_MIN_SEP_DEG) { st.textContent = `Vista ya tomada (a ${Math.round(nov)}°): sigue girando la hoja.`; return; }
+  if (now - stableSince < 350) { st.textContent = 'Vista nueva: deja quieto un momento…'; return; }
+  if (busy) return;
+  st.textContent = 'Tomando…';
+  takeShot();
+}
+
+function drawCoverage(cur) {
+  const cv = $('cobertura');
+  if (!cv) return;
+  const g = cv.getContext('2d');
+  const W = cv.width, R = W / 2 - 8, c = W / 2;
+  g.clearRect(0, 0, W, W);
+  g.strokeStyle = 'rgba(140,170,200,.25)';
+  g.lineWidth = 1;
+  for (const el of [0, 30, 60]) { g.beginPath(); g.arc(c, c, R * (90 - el) / 90, 0, Math.PI * 2); g.stroke(); }
+  const pos = (a) => { const r = R * (90 - Math.max(0, Math.min(90, a.el))) / 90, t = a.az * Math.PI / 180;
+                       return [c + r * Math.sin(t), c - r * Math.cos(t)]; };
+  for (const v of (session?.vistas || [])) {
+    if (!v.angulos) continue;
+    const [x, y] = pos(v.angulos);
+    g.fillStyle = v.camara === 'cam2' ? '#b48cff' : '#4fe3a0';
+    g.beginPath(); g.arc(x, y, 5, 0, Math.PI * 2); g.fill();
+  }
+  if (cur) {
+    const [x, y] = pos(cur);
+    g.strokeStyle = (cur.novedad_deg ?? 180) >= AUTO_MIN_SEP_DEG ? '#38d9ff' : '#ffb347';
+    g.lineWidth = 2.5;
+    g.beginPath(); g.arc(x, y, 8, 0, Math.PI * 2); g.stroke();
+  }
 }
 
 // ---------------- paso 1: objeto ----------------

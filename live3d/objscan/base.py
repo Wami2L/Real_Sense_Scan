@@ -228,4 +228,79 @@ def _pose_from_quads(quads, intr, layout, zmap, scale):
     if reproj > 3.0:
         return BasePose(False, markers=sorted(quads), reproj_px=reproj, scale_ratio=ratio,
                         message=msg + ": demasiado error (¿hoja doblada o marcador tapado?)")
+    if zmap is not None:
+        ref = refine_with_plane(quads, K, zmap, layout, T_b2c, scale)
+        if ref is not None:
+            T_b2c, s_abs, info = ref
+            ratio = s_abs / scale          # relativa a la escala pedida, como la de la profundidad
+            msg += f" · plano de la hoja por profundidad ({info['puntos']} pts, {info['rms_mm']:.1f} mm)"
     return BasePose(True, np.linalg.inv(T_b2c), sorted(quads), reproj, ratio, msg)
+
+
+def _umeyama(src, dst):
+    """Semejanza s, R, t que lleva src (N, 3) a dst (N, 3): dst ≈ s R src + t."""
+    mu_s, mu_d = src.mean(0), dst.mean(0)
+    a, b = src - mu_s, dst - mu_d
+    U, S, Vt = np.linalg.svd(b.T @ a / len(src))
+    D = np.eye(3)
+    if np.linalg.det(U) * np.linalg.det(Vt) < 0:
+        D[2, 2] = -1
+    R = U @ D @ Vt
+    s = float(np.trace(np.diag(S) @ D) / (a ** 2).sum(1).mean())
+    return s, R, mu_d - s * R @ mu_s
+
+
+def refine_with_plane(quads, K, zmap, layout, T_b2c, scale, step=2):
+    """Pose de la base con la profundidad: el PnP con marcadores pequeños (lejos o pocos) fija bien
+    la posición en la imagen pero mal la distancia y la inclinación. La D455 mide el plano de la
+    hoja con miles de puntos: se ajusta ese plano, se cortan con él los rayos de las esquinas de
+    los marcadores y una semejanza (Umeyama) entre la hoja nominal y esas esquinas 3D da la pose y
+    la escala real de la impresión a la vez. None si no hay plano fiable (se queda el PnP).
+    Devuelve (T_base->cámara, escala absoluta, info)."""
+    h, w = zmap.shape
+    vv, uu = np.mgrid[0:h:step, 0:w:step]
+    z = zmap[vv, uu]
+    ok = z > 0
+    uu, vv, z = uu[ok].astype(np.float64), vv[ok].astype(np.float64), z[ok]
+    P = np.column_stack(((uu - K[0, 2]) / K[0, 0] * z, (vv - K[1, 2]) / K[1, 1] * z, z))
+    Tc2b = np.linalg.inv(T_b2c)
+    Pb = P @ Tc2b[:3, :3].T + Tc2b[:3, 3]
+    hw, hh = layout.width_mm / 2000 * scale, layout.height_mm / 2000 * scale
+    r_free = layout.free_radius_m() * scale
+    sel = (np.abs(Pb[:, 0]) < hw - 0.005) & (np.abs(Pb[:, 2]) < hh - 0.005) & \
+          (np.hypot(Pb[:, 0], Pb[:, 2]) > r_free + 0.01) & (np.abs(Pb[:, 1]) < 0.05)
+    Q = P[sel]
+    if len(Q) < 1500:
+        return None
+    # plano robusto en el marco de la cámara (mínimos cuadrados con rechazo por MAD)
+    keep = np.ones(len(Q), bool)
+    for _ in range(4):
+        c = Q[keep].mean(0)
+        _, _, Vt = np.linalg.svd(Q[keep] - c, full_matrices=False)
+        n = Vt[2]
+        res = (Q - c) @ n
+        mad = float(np.median(np.abs(res[keep] - np.median(res[keep])))) * 1.4826
+        keep = np.abs(res) < max(3 * mad, 0.0015)
+    if keep.sum() < 1000:
+        return None
+    rms = float(np.sqrt(np.mean(res[keep] ** 2)))
+    if rms > 0.004:
+        return None
+    d = float(n @ c)
+    # esquinas de los marcadores: rayo de cada píxel ∩ plano
+    model = layout.marker_corners_3d()
+    M = np.vstack([model[m] for m in sorted(quads)])
+    px = np.vstack([quads[m] for m in sorted(quads)])
+    rays = np.column_stack(((px[:, 0] - K[0, 2]) / K[0, 0], (px[:, 1] - K[1, 2]) / K[1, 1], np.ones(len(px))))
+    den = rays @ n
+    if np.any(np.abs(den) < 1e-6):
+        return None
+    X = rays * (d / den)[:, None]
+    s, R, t = _umeyama(M, X)
+    fit = float(np.sqrt(np.mean(np.sum((s * M @ R.T + t - X) ** 2, axis=1))))
+    if fit > 0.004 or not (0.5 < s < 1.5):
+        return None
+    T = np.eye(4)
+    T[:3, :3], T[:3, 3] = R, t
+    # la semejanza lleva la hoja NOMINAL a la real: con la escala s, X = R (s·M) + t (metros reales)
+    return T, s, {"puntos": int(keep.sum()), "rms_mm": rms * 1000, "esquinas_mm": fit * 1000}
