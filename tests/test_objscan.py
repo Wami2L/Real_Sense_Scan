@@ -170,3 +170,20 @@ def test_dual_con_calibracion_desajustada_se_corrige_sin_fantasmas(tmp_path):
     assert info["aplicada"] and info["muestras"] >= 2       # consenso mínimo del algoritmo
     assert 30 < info["mm"] < 70 and 3 < info["deg"] < 9          # mide el desajuste inyectado
     assert _surface_error_mm(lib, s.result) < 2.0
+
+
+def test_varias_copias_de_la_hoja_no_se_mezclan(scene):
+    """Otra copia de la hoja a la vista (p. ej. pegada en la pared, con los mismos ids): se
+    separan las hojas y la pose sale de la de la mesa."""
+    from live3d.objscan.base import detect_all, render_sheet
+    T = orbit_pose(20)
+    s = scene.render(T, 0)
+    canvas = cv2.cvtColor(s["color"], cv2.COLOR_RGB2BGR)
+    wall = render_sheet(LAYOUTS["A3"], px_per_mm=0.6, guides=False)   # "hoja de la pared", de frente
+    canvas[5:5 + wall.shape[0], 5:5 + wall.shape[1]] = wall[..., None]
+    ids = [m for m, _ in detect_all(canvas, LAYOUTS["A3"])]
+    assert len(ids) > len(set(ids))                                  # de verdad hay ids repetidos
+    bp = estimate_pose(canvas, s["intrinsics"], LAYOUTS["A3"], zmap=s["depth"] * 0.001)
+    assert bp.ok and bp.sheets > 1
+    mm, deg = _err(bp.T_cam_to_base, scene.gt_T_cam_to_base(T, 0))
+    assert mm < 8 and deg < 0.6

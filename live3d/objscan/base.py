@@ -84,16 +84,60 @@ def render_sheet(layout, px_per_mm=4.0, guides=True):
     return img
 
 
-def detect(bgr, layout):
-    """Marcadores de la base visibles: {id: esquinas (4, 2) px}."""
+def detect_all(bgr, layout):
+    """Todas las detecciones de marcadores de la base: [(id, esquinas (4, 2) px)].
+    Puede haber ids repetidos si se ven varias copias de la hoja (p. ej. pegadas en la pared)."""
     params = cv2.aruco.DetectorParameters()
     params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
     det = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(ARUCO_DICT), params)
     corners, ids, _ = det.detectMarkers(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY))
     if ids is None:
-        return {}
+        return []
     known = set(layout.ids)
-    return {int(i): c.reshape(4, 2).astype(np.float64) for i, c in zip(ids.ravel(), corners) if int(i) in known}
+    return [(int(i), c.reshape(4, 2).astype(np.float64)) for i, c in zip(ids.ravel(), corners) if int(i) in known]
+
+
+def detect(bgr, layout):
+    """Marcadores de la base visibles: {id: esquinas (4, 2) px} (la hoja principal si hay varias)."""
+    sheets = group_sheets(detect_all(bgr, layout), layout)
+    return sheets[0] if sheets else {}
+
+
+def group_sheets(found, layout, K=None, scale=1.0):
+    """Separa las detecciones en hojas: cada marcador propone la pose de su hoja (PnP de un
+    cuadrado) y se agrupan los marcadores que encajan con ella, un ejemplar por id.
+    Devuelve [{id: esquinas}] de mayor a menor; con ids únicos, una sola hoja."""
+    if not found:
+        return []
+    ids = [m for m, _ in found]
+    if len(set(ids)) == len(ids):
+        return [dict(found)]
+    if K is None:   # sin intrínsecas: aproximación con un campo de visión típico
+        h = max(q[:, 1].max() for _, q in found) * 2
+        w = max(q[:, 0].max() for _, q in found) * 2
+        K = np.array([[0.75 * w, 0, w / 2], [0, 0.75 * w, h / 2], [0, 0, 1]], np.float64)
+    model = layout.marker_corners_3d()
+    groups = []
+    for m, q in found:
+        n, rvecs, tvecs, _ = cv2.solvePnPGeneric(model[m] * scale, q, K, None, flags=cv2.SOLVEPNP_IPPE)
+        for rv, tv in zip(rvecs[:n], tvecs[:n]):
+            best = {}
+            for j, (mj, qj) in enumerate(found):
+                proj, _ = cv2.projectPoints(model[mj] * scale, rv, tv, K, None)
+                err = float(np.sqrt(np.mean(np.sum((proj.reshape(4, 2) - qj) ** 2, axis=1))))
+                side = float(np.mean(np.linalg.norm(qj - np.roll(qj, 1, axis=0), axis=1)))
+                if err < max(4.0, 0.25 * side) and (mj not in best or err < best[mj][0]):
+                    best[mj] = (err, j)
+            groups.append(frozenset(j for _, j in best.values()))
+    # hojas disjuntas, de la más completa a la menos
+    sheets, used = [], set()
+    for g in sorted(set(groups), key=len, reverse=True):
+        g = g - used
+        if len({ids[j] for j in g}) < len(g) or not g:
+            continue
+        used |= g
+        sheets.append({ids[j]: found[j][1] for j in sorted(g)})
+    return sheets
 
 
 def K_from(intr):
@@ -108,9 +152,10 @@ class BasePose:
     reproj_px: float = None
     scale_ratio: float = None           # profundidad medida / profundidad PnP (1.0 = hoja al 100 %)
     message: str = ""
+    sheets: int = 1                     # copias de la hoja a la vista
 
     def public(self):
-        return {"ok": self.ok, "markers": self.markers,
+        return {"ok": self.ok, "markers": self.markers, "hojas": self.sheets,
                 "reproj_px": None if self.reproj_px is None else round(self.reproj_px, 2),
                 "scale_ratio": None if self.scale_ratio is None else round(self.scale_ratio, 4),
                 "message": self.message}
@@ -122,8 +167,30 @@ def estimate_pose(bgr, intr, layout, zmap=None, scale=1.0, quads=None):
     zmap: profundidad (m) alineada al color, opcional. Con ella se mide la relación de escala
     real/impresa (para detectar hojas impresas al 90 %, etc.). `scale` aplica una escala ya
     conocida a la geometría de la hoja.
+    Si se ven varias copias de la hoja (p. ej. otra pegada en la pared) se separan y se usa la
+    más horizontal (la de la mesa) entre las que dan una pose fiable.
     """
-    quads = detect(bgr, layout) if quads is None else quads
+    if quads is not None:
+        return _pose_from_quads(quads, intr, layout, zmap, scale)
+    sheets = group_sheets(detect_all(bgr, layout), layout, K_from(intr), scale)
+    if not sheets:
+        return BasePose(False, message="No se ve ningún marcador de la base")
+    poses = [_pose_from_quads(q, intr, layout, zmap, scale) for q in sheets]
+    for bp in poses:
+        bp.sheets = len(sheets)
+
+    def rank(bp):
+        if not bp.ok:
+            return (0, 0.0)
+        up = -float(np.linalg.inv(bp.T_cam_to_base)[1, 1])   # normal de la hoja vs. "arriba" de la imagen
+        return (1, up + 0.03 * len(bp.markers))
+    best = max(poses, key=rank)
+    if len(sheets) > 1:
+        best.message += " · se ven otras copias de la hoja: se usa la de la mesa"
+    return best
+
+
+def _pose_from_quads(quads, intr, layout, zmap, scale):
     if not quads:
         return BasePose(False, message="No se ve ningún marcador de la base")
     model = layout.marker_corners_3d()

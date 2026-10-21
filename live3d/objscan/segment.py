@@ -199,7 +199,19 @@ def analyze(snap, layout, vol, use_base=True, scale=1.0, sensor=D455):
     T = None
     if use_base:
         bp = estimate_pose(bgr, snap["intrinsics"], layout, zmap=zmap, scale=scale)
+        if bp.ok and bp.scale_ratio and abs(bp.scale_ratio - 1) > 0.015:
+            # hoja impresa a otro tamaño (p. ej. "ajustar a página"): la profundidad manda
+            fixed = estimate_pose(bgr, snap["intrinsics"], layout, zmap=zmap, scale=scale * bp.scale_ratio)
+            if fixed.ok:
+                fixed.scale_ratio = bp.scale_ratio * scale
+                bp = fixed
         out["base"] = bp.public()
+        if bp.sheets > 1:
+            out["warnings"].append("Se ven otras copias de la hoja de marcadores (¿en la pared?): se usa la de la "
+                                   "mesa, pero es mejor retirarlas o taparlas.")
+        if bp.ok and bp.scale_ratio and abs(bp.scale_ratio - 1) > 0.015:
+            out["warnings"].append(f"La hoja está impresa al {bp.scale_ratio * 100:.0f} %: se corrige sola, pero "
+                                   "lo ideal es imprimirla al 100 % (sin «ajustar a página»).")
         if bp.ok:
             T = bp.T_cam_to_base
     if T is None:
