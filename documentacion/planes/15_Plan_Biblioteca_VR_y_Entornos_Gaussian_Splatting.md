@@ -578,6 +578,32 @@ Unity.exe -batchmode -force-d3d12 -projectPath "<VR ScanWorld>" -executeMethod S
 python tools/splats.py comparar Saves/entornos/escena1/bench_estacion --referencia ref --variantes e150 --hojas
 ```
 
+## 13. LOD dinámico de toda la escena (2026-10-23, noche)
+
+Para poder recorrer el entorno entero (las estaciones solo valen cerca de su punto), como SuperSplat/PlayCanvas:
+- **Pirámide por trozos** (`tools/splats.py piramide`, `live3d/splats/piramide.py`): cubos de 3 m; por cubo, nivel 0
+  (originales) y fusiones por momentos en vóxeles de 4-128 cm. Un solo PLY ordenado por (trozo, nivel) + manifiesto con
+  cajas (ejes de Unity) y rangos. Iglesia: 809 trozos, 15,8 M splats (1,38 GB); versión Quest sin nivel 0: 6,0 M (524 MB).
+- **Fork de gsplat**: `GsplatRenderer.SetSelection` (dibuja solo los índices elegidos; la profundidad y la ordenación
+  solo sobre ellos) y **pre-pasada de profundidad** opcional (`DepthPrepass`, shader `Gsplat/Depth`): los núcleos casi
+  opacos escriben profundidad empujada hacia atrás y el pase de color descarta por early-Z lo oculto.
+- **`ScanWorld.SplatLod`**: nivel por trozo según la distancia (tamaño angular constante), recorte por frustum con
+  margen (los trozos del margen ×3 más gruesos), periferia más gruesa y presupuesto de splats por bisección del ángulo.
+
+Medidas (16 cámaras repartidas por toda la iglesia, un ojo, RTX 3050; escena completa ~105 ms):
+
+| Configuración | 800 k | 400 k | Calidad (PSNR / SSIM, 800 k) |
+|---|---|---|---|
+| Sin pre-pasada | 38,0 ms | 25,4 ms | 24,8 / 0,832 |
+| Pre-pasada 0,5 / 2 % / 2 cm (por defecto) | 18,2 ms | 11,9 ms | 24,8 / 0,830 (sin pérdida) |
+| + escala 0,7 (1008×1109) | 13,1 ms | 8,4 ms | — |
+
+Perfil Quest (pirámide sin originales, 1152×1267, 150 k): 11 ms, PSNR 22,2 / SSIM 0,74 (borroso: falta destilar los
+niveles de la pirámide). Escena de Unity: ScanWorld › Recrear escena de la iglesia (variantes 1 = LOD PC 600 k, 2 = perfil
+Quest 150 k). Escenas nuevas: `python tools/splats.py preparar <escena.ply> --nombre X --unity <proyecto>`.
+
+Pendiente: menú genérico de Unity para las escenas exportadas por `preparar`, destilar la pirámide, probar en el visor.
+
 ---
 
 ## Fuentes

@@ -40,25 +40,54 @@ def masks(core, rep, extra, o: Opciones):
 
 
 def origin_from_floor(rep, core):
-    """Origen: centro de la planta (p2-p98 de los splats del suelo) sobre el plano del suelo."""
+    """
+    Origen: centro de la planta (p2-p98 de los splats del suelo, en la base del plano) sobre el plano del suelo.
+    Sirve para cualquier eje vertical (rep["suelo"]["normal_arriba"]); la nivelación fina no se aplica a los datos
+    (obligaría a rotar los SH) sino en Unity, como rotación del objeto (ver unity_rotation).
+    """
     s = rep["suelo"]
-    if s["eje"] != "-y":
-        raise ValueError(f"suelo con arriba {s['eje']}: solo está implementado -y (RDF)")
-    fy = s["punto"][1]
+    n = np.asarray(s["normal_arriba"], np.float64)
+    p0 = np.asarray(s["punto"], np.float64)
     pos, alpha = core["pos"], core["alpha"]
-    floor = pos[(alpha > 0.5) & (np.abs(pos[:, 1] - fy) < 0.15)]
-    x = np.percentile(floor[:, 0], [2, 98]).mean()
-    z = np.percentile(floor[:, 2], [2, 98]).mean()
-    return np.array([x, fy, z])
+    on_floor = (alpha > 0.5) & (np.abs((pos - p0) @ n) < 0.15)
+    floor = pos[on_floor].astype(np.float64)
+    a = np.cross(n, [1.0, 0, 0] if abs(n[0]) < 0.9 else [0, 0, 1.0])
+    a /= np.linalg.norm(a)
+    b = np.cross(n, a)
+    u, v = (floor - p0) @ a, (floor - p0) @ b
+    cu = np.percentile(u, [2, 98]).mean()
+    cv = np.percentile(v, [2, 98]).mean()
+    return p0 + cu * a + cv * b
+
+
+def unity_rotation(rep):
+    """
+    Rotación (cuaternión x, y, z, w de Unity) que pone la normal del suelo hacia +Y una vez importado en RDF
+    ((x, y, z) del archivo -> (x, -y, z) en Unity). Para la iglesia es una corrección de 0,33°.
+    """
+    n = np.asarray(rep["suelo"]["normal_arriba"], np.float64)
+    nu = np.array([n[0], -n[1], n[2]])
+    nu /= np.linalg.norm(nu)
+    up = np.array([0.0, 1.0, 0.0])
+    axis = np.cross(nu, up)
+    s = np.linalg.norm(axis)
+    c = float(nu @ up)
+    if s < 1e-9:
+        return [0.0, 0.0, 0.0, 1.0] if c > 0 else [1.0, 0.0, 0.0, 0.0]
+    axis /= s
+    ang = np.arctan2(s, c)
+    xyz = axis * np.sin(ang / 2)
+    return [float(xyz[0]), float(xyz[1]), float(xyz[2]), float(np.cos(ang / 2))]
 
 
 MAX_BYTES = int(1.8 * 2**30)   # gsplat (C#) no lee archivos de más de 2 GB: se parte la salida
 
 
-def clean(ply: SplatPly, out_path, o: Opciones, core=None, rep=None, extra=None):
+def clean(ply: SplatPly, out_path, o: Opciones, core=None, rep=None, extra=None, max_bytes=None):
     """
-    Escribe la escena limpia y devuelve el manifiesto (dict). Si pasa de MAX_BYTES se parte en trozos
-    contiguos a lo largo de z (<nombre>_p0.ply, _p1.ply…): el manifiesto lista las partes en "partes".
+    Escribe la escena limpia y devuelve el manifiesto (dict). Si pasa de max_bytes (por defecto MAX_BYTES) se parte en
+    trozos contiguos a lo largo de z (<nombre>_p0.ply, _p1.ply…): el manifiesto lista las partes en "partes".
+    max_bytes=float("inf") escribe siempre un solo archivo (entrada intermedia, p. ej. para la pirámide).
     """
     if core is None:
         core = analisis.load_core(ply)
@@ -79,7 +108,8 @@ def clean(ply: SplatPly, out_path, o: Opciones, core=None, rep=None, extra=None)
 
     sh_out = min(o.sh, ply.sh_degree)
     bytes_per = 4 * (14 + 3 * {0: 0, 1: 3, 2: 8, 3: 15}[sh_out])
-    n_parts = max(1, int(np.ceil(keep.sum() * bytes_per / MAX_BYTES)))
+    limit = MAX_BYTES if max_bytes is None else max_bytes
+    n_parts = max(1, int(np.ceil(keep.sum() * bytes_per / limit)))
     comment = [f"RealSenseScans tools/splats.py limpiar: origen {origin.round(4).tolist()}"]
     outputs, n = [], 0
     if n_parts == 1:
@@ -106,6 +136,9 @@ def clean(ply: SplatPly, out_path, o: Opciones, core=None, rep=None, extra=None)
         "opciones": asdict(o),
         "sh_salida": sh_out,
         "traslacion_restada": origin.tolist(),
-        "convencion": "RDF (x derecha, y abajo, z adelante); suelo en y = 0, arriba = -y. Importar en gsplat como RDF.",
+        "convencion": "Importar en gsplat como RDF ((x, y, z) -> Unity (x, -y, z)). Solo trasladado: el centro del "
+                      "suelo queda en el origen; la nivelación va en Unity como rotación del objeto (rotacion_unity).",
         "inclinacion_suelo_grados": rep["suelo"]["inclinacion_grados"],
+        "eje_arriba_archivo": rep["suelo"]["eje"],
+        "rotacion_unity": unity_rotation(rep),
     }

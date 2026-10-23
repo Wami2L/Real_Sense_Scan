@@ -91,9 +91,28 @@ def cmd_camaras(a):
     if len(side) > 1000:
         zc = float(np.median(side[:, 2]))
         vistas.append(v("capilla", (xc, eye, zc), (float(np.percentile(side[:, 0], 5)), eye, zc)))
+    name = "camaras.json"
+    if a.recorrido:
+        # Recorrido por toda la escena: puntos del suelo separados >= 3 m, orientación al azar, ojos a a.ojos.
+        rng = np.random.default_rng(a.semilla)
+        cand = floor[rng.permutation(len(floor))[:200000]]
+        picked = []
+        for p in cand:
+            if all(np.hypot(p[0] - q[0], p[2] - q[2]) >= 3.0 for q in picked):
+                picked.append(p)
+            if len(picked) >= a.recorrido:
+                break
+        vistas = []
+        for i, p in enumerate(picked):
+            yaw = rng.uniform(0, 2 * np.pi)
+            pitch = np.radians(rng.uniform(-10, 25))
+            d = (np.cos(pitch) * np.sin(yaw), np.sin(pitch), np.cos(pitch) * np.cos(yaw))
+            pos = (float(p[0]), eye, float(p[2]))
+            vistas.append(v(f"r{i:02d}", pos, (pos[0] + d[0], pos[1] + d[1], pos[2] + d[2])))
+        name = "camaras_recorrido.json"
     out = {"fov_v": a.fov, "vistas": vistas,
            "nota": f"Ejes de Unity (RDF importado: y = -y_datos). Suelo y = {-fy:.3f}, ojos a {a.ojos} m."}
-    path = os.path.join(entorno_dir(a.ply), "camaras.json")
+    path = os.path.join(entorno_dir(a.ply), name)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)
     print(f"{len(vistas)} cámaras en {path} (nave x={xc:.2f}, z {z2:.1f}…{z98:.1f}, suelo y={-fy:.2f})")
@@ -239,6 +258,136 @@ def cmd_lod(a):
     return 0
 
 
+def cmd_piramide(a):
+    """Pirámide LOD por trozos de la escena completa (plan 15 §13): <entorno>/<nombre>.ply + .json."""
+    from live3d.splats import piramide
+    t0 = time.time()
+    ply = SplatPly.open(a.ply)
+    man_in_path = a.ply[:-4] + ".json"
+    man_in = {}
+    if os.path.exists(man_in_path):
+        with open(man_in_path, encoding="utf-8") as f:
+            man_in = json.load(f)
+    out = os.path.join(entorno_dir(a.ply), a.nombre + ".ply")
+    voxels = tuple(float(v) for v in a.voxeles.split(","))
+    man = piramide.build(ply, out, trozo=a.trozo, voxels=voxels, sh_degree=a.sh, nivel_minimo=a.nivel_minimo)
+    man["traslacion_restada"] = man_in.get("traslacion_restada")
+    man["licencia"] = man_in.get("licencia")
+    with open(out[:-4] + ".json", "w", encoding="utf-8") as f:
+        json.dump(man, f, ensure_ascii=False)
+    print(f"{out}: {os.path.getsize(out) / 2**20:.0f} MB ({time.time() - t0:.0f} s)")
+    return 0
+
+
+def cmd_preparar(a):
+    """
+    Cadena completa para una escena nueva (plan 15 §13): análisis + vistas previas, limpieza (SH1, trasladada, sin
+    partir), pirámide LOD para PC y para Quest 2 y, con --unity, exportación al proyecto VR ScanWorld
+    (Assets/ScanWorld/Entornos/<nombre>/, PLY con .meta en RDF). En Unity: ScanWorld › Crear escenas de entornos.
+    """
+    from live3d.splats import limpieza, piramide
+    t0 = time.time()
+    ply = SplatPly.open(a.ply)
+    base = entorno_dir(a.ply)
+    print(f"[1/4] Análisis: {ply.count:,} splats · SH{ply.sh_degree} · "
+          f"{ply.count * ply.bytes_per_splat / 2**30:.2f} GB")
+    core = analisis.load_core(ply)
+    rep, extra = analisis.inspect(ply, core)
+    out_info = os.path.join(base, "analisis")
+    os.makedirs(out_info, exist_ok=True)
+    with open(os.path.join(out_info, "informe.json"), "w", encoding="utf-8") as f:
+        json.dump(rep, f, indent=2, ensure_ascii=False)
+    print_summary(rep)
+    if rep["suelo"]["inclinacion_grados"] > 10:
+        print(f"  ! El suelo está inclinado {rep['suelo']['inclinacion_grados']:.1f}° respecto al eje "
+              f"{rep['suelo']['eje']}: revisa las vistas de {out_info} (la nivelación se aplica en Unity)")
+
+    print("[2/4] Limpieza")
+    o = limpieza.Opciones(sh=a.sh)
+    clean_path = os.path.join(base, f"limpio_sh{a.sh}.ply")
+    man = limpieza.clean(ply, clean_path, o, core, rep, extra, max_bytes=float("inf"))
+    man["licencia"] = leer_licencia(a.ply)
+    with open(clean_path[:-4] + ".json", "w", encoding="utf-8") as f:
+        json.dump(man, f, indent=2, ensure_ascii=False)
+    print(f"  {man['splats_salida']:,} splats ({100 * man['splats_salida'] / ply.count:.1f} %) · quitados {man['quitados']}")
+    del core, extra
+
+    print("[3/4] Pirámides LOD")
+    clean = SplatPly.open(clean_path)
+    outputs = []
+    for name, nivel_min in (("piramide", 0), ("piramide_quest", a.nivel_quest)):
+        path = os.path.join(base, name + ".ply")
+        pm = piramide.build(clean, path, trozo=a.trozo, sh_degree=a.sh, nivel_minimo=nivel_min)
+        # gsplat no lee PLY de más de 2 GB: subir el nivel mínimo hasta caber.
+        while os.path.getsize(path) > 1.9 * 2**30 and pm["nivel_minimo"] < len(pm["niveles_voxel_m"]) - 1:
+            print(f"  ! {name}: {os.path.getsize(path) / 2**30:.2f} GB > 1,9 GB; nivel mínimo {pm['nivel_minimo'] + 1}")
+            pm = piramide.build(clean, path, trozo=a.trozo, sh_degree=a.sh, nivel_minimo=pm["nivel_minimo"] + 1)
+        pm.update(traslacion_restada=man["traslacion_restada"], rotacion_unity=man["rotacion_unity"],
+                  licencia=man["licencia"], nombre=a.nombre, coordenadas="RDF")
+        with open(path[:-4] + ".json", "w", encoding="utf-8") as f:
+            json.dump(pm, f, ensure_ascii=False)
+        outputs.append(path)
+        print(f"  {name}: {pm['splats_total']:,} splats, {os.path.getsize(path) / 2**20:.0f} MB")
+
+    if a.unity:
+        print("[4/4] Exportación a Unity")
+        exportar_unity(a.unity, a.nombre, outputs, leer_licencia(a.ply))
+    else:
+        print("[4/4] Sin --unity: no se exporta")
+    print(f"Listo en {time.time() - t0:.0f} s")
+    return 0
+
+
+_PLY_META = """fileFormatVersion: 2
+guid: {guid}
+ScriptedImporter:
+  internalIDToNameTable: []
+  externalObjects: {{}}
+  serializedVersion: 2
+  userData:
+  assetBundleName:
+  assetBundleVariant:
+  script: {{fileID: 11500000, guid: 7468ea6559404cbc8f3e83b0b1a00683, type: 3}}
+  Compression: 1
+  OpacityPruneThreshold: 0
+  SourceCoordinates: 6
+"""
+_TEXT_META = """fileFormatVersion: 2
+guid: {guid}
+TextScriptImporter:
+  externalObjects: {{}}
+  userData:
+  assetBundleName:
+  assetBundleVariant:
+"""
+
+
+def exportar_unity(unity_project, nombre, plys, licencia):
+    """
+    Copia las pirámides (PLY + manifiesto) a <proyecto>/Assets/ScanWorld/Entornos/<nombre>/ con sus .meta ya escritos
+    (importador de gsplat en RDF: así se importan bien a la primera). Esa carpeta está ignorada en git.
+    """
+    import shutil
+    import uuid
+    dst = os.path.join(unity_project, "Assets", "ScanWorld", "Entornos", nombre)
+    os.makedirs(dst, exist_ok=True)
+    for ply_path in plys:
+        for src, tpl in ((ply_path, _PLY_META), (ply_path[:-4] + ".json", _TEXT_META)):
+            target = os.path.join(dst, os.path.basename(src))
+            shutil.copyfile(src, target)
+            if not os.path.exists(target + ".meta"):
+                with open(target + ".meta", "w", encoding="utf-8", newline="\n") as f:
+                    f.write(tpl.format(guid=uuid.uuid4().hex))
+            print(f"  {target}")
+    if licencia:
+        target = os.path.join(dst, "LICENCIA.txt")
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(licencia + "\n")
+        if not os.path.exists(target + ".meta"):
+            with open(target + ".meta", "w", encoding="utf-8", newline="\n") as f:
+                f.write(_TEXT_META.format(guid=uuid.uuid4().hex))
+
+
 def cmd_comparar(a):
     """PSNR/SSIM de cada variante contra la referencia, por vista, y hojas lado a lado."""
     from PIL import Image
@@ -273,6 +422,11 @@ def cmd_comparar(a):
             if not os.path.exists(p):
                 continue
             r, x = load(os.path.join(ref_dir, v + ".png")), load(p)
+            if a.centro < 1:
+                # Solo la zona central (donde mira el ojo): en VR la periferia la emborronan las lentes.
+                h, w = r.shape[:2]
+                ch, cw = int(h * a.centro / 2), int(w * a.centro / 2)
+                r, x = r[h // 2 - ch:h // 2 + ch, w // 2 - cw:w // 2 + cw], x[h // 2 - ch:h // 2 + ch, w // 2 - cw:w // 2 + cw]
             mse = float(((r - x) ** 2).mean())
             psnr = 10 * np.log10(1.0 / max(mse, 1e-12))
             table[lab][v] = {"psnr": psnr, "ssim": ssim(r, x), "ms": times.get(v)}
@@ -299,7 +453,7 @@ def cmd_comparar(a):
         rt = ref_times.get(v)
         print(f"| {v} | {rt:.1f} | " if rt else f"| {v} | — | ", end="")
         print(" | ".join(cells) + " |")
-    out = os.path.join(a.bench, f"comparar_{a.referencia}.json")
+    out = os.path.join(a.bench, f"comparar_{a.referencia}" + (f"_centro{a.centro:g}" if a.centro < 1 else "") + ".json")
     with open(out, "w", encoding="utf-8") as f:
         json.dump({"referencia": a.referencia, "tiempos_ref": ref_times, "variantes": table}, f, indent=2)
     return 0
@@ -354,6 +508,9 @@ def main():
     p.add_argument("ply")
     p.add_argument("--ojos", type=float, default=1.6, help="altura de los ojos sobre el suelo (m)")
     p.add_argument("--fov", type=float, default=90.0, help="campo de visión vertical (grados)")
+    p.add_argument("--recorrido", type=int, default=0,
+                   help="en lugar de las vistas fijas, N puntos repartidos por todo el suelo (camaras_recorrido.json)")
+    p.add_argument("--semilla", type=int, default=0)
     p.set_defaults(func=cmd_camaras)
     p = sub.add_parser("limpiar", help="quitar flotantes/transparentes/gigantes, recortar SH y trasladar")
     p.add_argument("ply")
@@ -390,11 +547,28 @@ def main():
     p.add_argument("--sin-oclusion", action="store_true", help="no descartar lo que no se ve desde la estación")
     p.add_argument("--sh", type=int, default=1)
     p.set_defaults(func=cmd_lod)
+    p = sub.add_parser("piramide", help="pirámide LOD por trozos de toda la escena (LOD dinámico en Unity)")
+    p.add_argument("ply", help="escena limpia (salida de 'limpiar', con su .json)")
+    p.add_argument("--nombre", default="piramide")
+    p.add_argument("--trozo", type=float, default=3.0, help="lado de los trozos (m)")
+    p.add_argument("--voxeles", default="0.04,0.08,0.16,0.32,0.64,1.28", help="vóxel de cada nivel fusionado (m)")
+    p.add_argument("--nivel-minimo", type=int, default=0, help="omitir los niveles más finos (Quest: 1)")
+    p.add_argument("--sh", type=int, default=1)
+    p.set_defaults(func=cmd_piramide)
+    p = sub.add_parser("preparar", help="cadena completa para una escena nueva (limpieza + pirámides + Unity)")
+    p.add_argument("ply", help="escena 3DGS original (.ply)")
+    p.add_argument("--nombre", required=True, help="nombre del entorno (carpeta en Unity y título de la escena)")
+    p.add_argument("--unity", help="ruta del proyecto Unity (VR ScanWorld) para exportar las pirámides")
+    p.add_argument("--trozo", type=float, default=3.0)
+    p.add_argument("--sh", type=int, default=1)
+    p.add_argument("--nivel-quest", type=int, default=1, help="nivel mínimo de la pirámide de Quest 2")
+    p.set_defaults(func=cmd_preparar)
     p = sub.add_parser("comparar", help="PSNR/SSIM y tiempos de variantes del banco de Unity")
     p.add_argument("bench", help="carpeta del banco (<entorno>/bench)")
     p.add_argument("--referencia", required=True)
     p.add_argument("--variantes", required=True, help="etiquetas separadas por comas")
     p.add_argument("--hojas", action="store_true", help="guardar hojas referencia | variante | diferencia×4")
+    p.add_argument("--centro", type=float, default=1.0, help="medir solo la zona central (fracción de ancho y alto)")
     p.set_defaults(func=cmd_comparar)
     a = ap.parse_args()
     return a.func(a)

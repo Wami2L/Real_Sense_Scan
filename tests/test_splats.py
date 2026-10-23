@@ -202,3 +202,33 @@ def test_pared_de_canto_no_se_tapa_a_si_misma():
     normal = np.tile(np.float32([1, 0, 0]), (len(pos), 1))            # la pared mira hacia x
     imp = estacion.importance(pos, alpha, sigma, np.ones(len(pos), bool), pts, normal=normal)
     assert (imp[big:] > 0).mean() > 0.97
+
+
+def test_piramide_rangos_y_niveles(scene):
+    """Pirámide LOD por trozos: rangos contiguos sin solapes, niveles cada vez más pequeños, cajas en ejes de
+    Unity (y invertida) y nivel 0 = splats originales."""
+    from live3d.splats import piramide
+    d, path, _ = scene
+    ply = SplatPly.open(path)
+    out = str(d / "piramide.ply")
+    man = piramide.build(ply, out, trozo=4.0, voxels=(0.1, 0.4), log=lambda *a: None)
+    pyr = SplatPly.open(out)
+    assert pyr.count == man["splats_total"]
+    ranges = sorted((s, c) for t in man["trozos"] for s, c in zip(t["inicio"], t["cuenta"]))
+    cursor = 0
+    for s, c in ranges:                                   # contiguos, sin huecos ni solapes
+        assert s == cursor
+        cursor += c
+    assert cursor == pyr.count
+    per_level = man["splats_por_nivel"]
+    assert per_level[0] >= ply.count - 100               # solo se descartan trozos casi vacíos
+    assert per_level[0] > per_level[1] > per_level[2]
+    # Cajas en ejes de Unity: y = -y del archivo, así que el suelo (y = 2 en RDF) queda en y_unity = -2.
+    ys = [(t["min"][1], t["max"][1]) for t in man["trozos"]]
+    assert min(lo for lo, _ in ys) < -1.9 and all(lo <= hi for lo, hi in ys)
+    # Nivel 0 de cada trozo = sus splats originales, sin tocar.
+    orig = ply.columns(["x", "y", "z"])
+    lvl0 = np.concatenate([pyr.columns(["x", "y", "z"])[t["inicio"][0]:t["inicio"][0] + t["cuenta"][0]]
+                           for t in man["trozos"]])
+    key = lambda a: np.sort(a.view(np.dtype((np.void, a.dtype.itemsize * 3))).ravel())   # noqa: E731
+    assert np.isin(key(np.ascontiguousarray(lvl0)), key(np.ascontiguousarray(orig))).all()
