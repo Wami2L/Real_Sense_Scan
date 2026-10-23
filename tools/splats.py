@@ -388,6 +388,38 @@ def exportar_unity(unity_project, nombre, plys, licencia):
                 f.write(_TEXT_META.format(guid=uuid.uuid4().hex))
 
 
+def exportar_texto(unity_project, nombre, path):
+    """Copia un JSON (manifiesto, colisiones) a Assets/ScanWorld/Entornos/<nombre>/ con su .meta de texto."""
+    import shutil
+    import uuid
+    dst = os.path.join(unity_project, "Assets", "ScanWorld", "Entornos", nombre)
+    os.makedirs(dst, exist_ok=True)
+    target = os.path.join(dst, os.path.basename(path))
+    shutil.copyfile(path, target)
+    if not os.path.exists(target + ".meta"):
+        with open(target + ".meta", "w", encoding="utf-8", newline="\n") as f:
+            f.write(_TEXT_META.format(guid=uuid.uuid4().hex))
+    print(f"  {target}")
+
+
+def cmd_colision(a):
+    """Colisiones del entorno para Unity (plan 15 G5): <entorno>/colision.json + colision_planta.png."""
+    from live3d.splats import colision
+    t0 = time.time()
+    ply = SplatPly.open(a.ply)
+    o = colision.Opciones(voxel=a.voxel, min_alfa=a.alfa, min_splats=a.min_splats)
+    man, occ, origin = colision.build(ply, o)
+    base = entorno_dir(a.ply)
+    out = os.path.join(base, "colision.json")
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(man, f, ensure_ascii=False)
+    colision.vista_planta(occ, origin, o.voxel, os.path.join(base, "colision_planta.png"))
+    print(f"{out}: {len(man['cajas']) // 6:,} cajas ({time.time() - t0:.0f} s)")
+    if a.unity:
+        exportar_texto(a.unity, a.nombre, out)
+    return 0
+
+
 def cmd_comparar(a):
     """PSNR/SSIM de cada variante contra la referencia, por vista, y hojas lado a lado."""
     from PIL import Image
@@ -563,6 +595,14 @@ def main():
     p.add_argument("--sh", type=int, default=1)
     p.add_argument("--nivel-quest", type=int, default=1, help="nivel mínimo de la pirámide de Quest 2")
     p.set_defaults(func=cmd_preparar)
+    p = sub.add_parser("colision", help="cajas de colisión del entorno para Unity (suelo, paredes, bancos)")
+    p.add_argument("ply", help="escena limpia (salida de 'limpiar'): mismo marco que las pirámides")
+    p.add_argument("--voxel", type=float, default=0.2, help="lado de los vóxeles (m)")
+    p.add_argument("--alfa", type=float, default=0.3, help="opacidad mínima de los splats que cuentan")
+    p.add_argument("--min-splats", type=int, default=5, help="splats por vóxel para ocuparlo")
+    p.add_argument("--unity", help="ruta del proyecto Unity (VR ScanWorld) para copiar colision.json")
+    p.add_argument("--nombre", default="Iglesia", help="carpeta del entorno en Unity")
+    p.set_defaults(func=cmd_colision)
     p = sub.add_parser("comparar", help="PSNR/SSIM y tiempos de variantes del banco de Unity")
     p.add_argument("bench", help="carpeta del banco (<entorno>/bench)")
     p.add_argument("--referencia", required=True)
