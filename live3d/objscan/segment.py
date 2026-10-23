@@ -195,9 +195,11 @@ def object_extent(Pb):
             "alto_cm": round(float(hi[1] - max(lo[1], 0)) * 100, 1)}
 
 
-def analyze(snap, layout, vol, use_base=True, scale=1.0, sensor=D455_OBJ):
+def analyze(snap, layout, vol, use_base=True, scale=1.0, sensor=D455_OBJ, T_fallback=None):
     """Diagnóstico del encuadre de UNA vista: base, objeto, tamaño, distancia y avisos.
-    Rectifica la lente primero; devuelve el snapshot rectificado en out["snap"]."""
+    Rectifica la lente primero; devuelve el snapshot rectificado en out["snap"].
+    T_fallback: pose a usar si esta cámara no ve la hoja (la Cam 2 con la calibración dual).
+    out["origen_pose"]: "base" | "calibración" | "mesa"."""
     from .optica import rectify_snapshot
     snap = rectify_snapshot(snap)
     bgr = cv2.cvtColor(snap["color"], cv2.COLOR_RGB2BGR)
@@ -221,7 +223,12 @@ def analyze(snap, layout, vol, use_base=True, scale=1.0, sensor=D455_OBJ):
                                    "lo ideal es imprimirla al 100 % (sin «ajustar a página»).")
         if bp.ok:
             T = bp.T_cam_to_base
+            out["origen_pose"] = "base"
+    if T is None and T_fallback is not None:
+        T = np.asarray(T_fallback, np.float64)
+        out["origen_pose"] = "calibración"
     if T is None:
+        out["origen_pose"] = "mesa"
         T, v2 = frame_without_base(snap, sensor=sensor)
         if T is None:
             out["warnings"].append(v2)

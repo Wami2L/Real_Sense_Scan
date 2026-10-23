@@ -57,7 +57,8 @@ a { color: var(--cyan); text-decoration: none; }
 .stage { position: relative; min-width: 0; min-height: 0; background: #020308; display: grid; place-items: center; overflow: hidden; }
 .stage img, .stage canvas { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; display: block; }
 .stage-empty { position: absolute; color: var(--dim); }
-.chips { position: absolute; top: 14px; left: 14px; display: flex; flex-wrap: wrap; gap: 8px; max-width: 75%; }
+.top-left { position: absolute; top: 14px; left: 14px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; max-width: 75%; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { background: var(--panel); border: 1px solid var(--border); border-radius: 99px; padding: 5px 11px; font-size: 0.78rem; display: flex; gap: 6px; align-items: center; }
 .chip b { font-weight: 600; }
 .chip.ok { border-color: rgba(52, 211, 153, .35); }
@@ -144,3 +145,19 @@ kbd { font-family: var(--mono); font-size: 0.68rem; background: rgba(5,7,13,.25)
 .autocap .help { margin: 6px 0 0; }
 .switch { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; font-weight: 600; }
 .switch input { width: 18px; height: 18px; accent-color: #38d9ff; }
+
+/* dos cámaras en el encuadre */
+.vistas { width: 100%; height: 100%; display: grid; grid-template-columns: 1fr; gap: 6px; min-height: 0; }
+.vistas.dual { grid-template-columns: 1fr 1fr; align-content: center; }
+.vistas.dual figure { height: auto; }
+.vistas.dual figcaption { top: 4px; }
+.vistas figure { position: relative; margin: 0; min-width: 0; min-height: 0; display: grid; place-items: center; }
+.vistas figcaption { position: absolute; top: 8px; right: 8px; background: rgba(8,12,22,.8); border: 1px solid var(--border);
+  border-radius: 8px; padding: 3px 9px; font-size: 0.74rem; color: var(--muted); }
+.vistas figcaption b { color: var(--ok); font-weight: 600; }
+.vistas figcaption b.warn { color: var(--warn); }
+.calib { display: flex; gap: 8px; align-items: center; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; font-size: 0.76rem; }
+.calib b.ok { color: var(--ok); } .calib b.bad { color: var(--warn); }
+button.small { padding: 4px 9px; font-size: 0.74rem; }
+@media (max-width: 900px) { .vistas.dual { grid-template-columns: 1fr; } }

@@ -603,6 +603,17 @@ class RealSenseSource(BaseSource):
             self._stop.wait(0.5)
 
 
+def _scaled_intrinsics(intr, k):
+    """Intrínsecas de la misma cámara con la imagen escalada por k (convención de centro de píxel)."""
+    if k == 1.0:
+        return intr
+    out = dict(intr)
+    out["width"], out["height"] = int(round(intr["width"] * k)), int(round(intr["height"] * k))
+    out["fx"], out["fy"] = intr["fx"] * k, intr["fy"] * k
+    out["ppx"], out["ppy"] = (intr["ppx"] + 0.5) * k - 0.5, (intr["ppy"] + 0.5) * k - 0.5
+    return out
+
+
 def _to_np(frame, h, w, channels, dtype):
     """Copia un frame a numpy de forma robusta (los filtros pueden perder metadatos)."""
     shape = (h, w, channels) if channels > 1 else (h, w)
@@ -1065,6 +1076,11 @@ class DualRealSenseSource(_DualMixin, BaseSource):
     FRAME_TIMEOUT_MS = 2000
     STALL_SECONDS = 6.0
     HARD_RESET_AFTER_FAILURES = 2
+    # Color a la resolución completa del sensor RGB de la D455 (1280x800, obturador global): los
+    # snapshots (escáner de objetos, calibración) llevan el color en HD y la profundidad alineada a
+    # él; el stream en vivo se reduce al ancho del perfil de profundidad para no cargar el visor.
+    # Por cámara se puede fijar "color_profile": [w, h, fps] en el JSON (p. ej. [848, 480, 30]).
+    COLOR_PROFILE = (1280, 800, 30)
 
     def __init__(self, store, on_frame, has_demand=lambda: True, log=print, config_path=None):
         super().__init__(store, on_frame, has_demand=has_demand, log=log)
@@ -1092,6 +1108,47 @@ class DualRealSenseSource(_DualMixin, BaseSource):
     def _emitter_for(self, serial, is_master):
         c = self._cam_config(serial)
         return bool(c["emitter_enabled"]) if "emitter_enabled" in c else True
+
+    # ---- opciones de profundidad en caliente (preset visual y potencia del láser) ----
+    def set_depth_options(self, preset=None, laser_power=None, emitter=None):
+        """Pide a los workers aplicar un preset visual (PRESETS), la potencia del láser (mW, o
+        "max") y/o encender el emisor IR. Se aplica en el siguiente cuadro de cada cámara; el estado
+        por cámara lo refleja. No toca el JSON de configuración."""
+        if preset is not None and preset not in PRESETS:
+            raise ValueError(f"preset desconocido: {preset}")
+        with self._lock:
+            opts = dict(getattr(self, "_depth_opts", {}))
+            if preset is not None:
+                opts["preset"] = preset
+            if laser_power is not None:
+                opts["laser_power"] = laser_power
+            if emitter is not None:
+                opts["emitter"] = bool(emitter)
+            self._depth_opts = opts
+            self._depth_opts_ver = getattr(self, "_depth_opts_ver", 0) + 1
+        return opts
+
+    def _apply_depth_options(self, cam_idx, sensor, opts):
+        rs = self.rs
+        applied = {}
+        try:
+            if opts.get("preset") and sensor.supports(rs.option.visual_preset):
+                sensor.set_option(rs.option.visual_preset, PRESETS[opts["preset"]])
+                applied["preset"] = opts["preset"]
+            if opts.get("emitter") is not None and sensor.supports(rs.option.emitter_enabled):
+                sensor.set_option(rs.option.emitter_enabled, 1 if opts["emitter"] else 0)
+                applied["emitter"] = bool(opts["emitter"])
+            lp = opts.get("laser_power")
+            if lp is not None and sensor.supports(rs.option.laser_power):
+                rng = sensor.get_option_range(rs.option.laser_power)
+                val = rng.max if lp == "max" else float(np.clip(float(lp), rng.min, rng.max))
+                sensor.set_option(rs.option.laser_power, val)
+                applied["laser_power"] = round(float(sensor.get_option(rs.option.laser_power)))
+        except Exception as ex:  # noqa: BLE001
+            self.log(f"[CamWorker {cam_idx}] Aviso al aplicar opciones de profundidad: {ex}")
+        if applied:
+            self._set_cam(cam_idx, **applied)
+        return applied
 
     def _run(self):
         if len(self.serials) < 2:
@@ -1167,17 +1224,31 @@ class DualRealSenseSource(_DualMixin, BaseSource):
         if usb and usb.startswith("2"):
             self.log(f"[CamWorker {cam_idx}] AVISO: {serial} por USB {usb}; 2 x 848x480@30 requiere USB 3")
 
-        w, h, fps = (self._cam_config(serial).get("profile") or [848, 480, 30])[:3]
+        ccfg = self._cam_config(serial)
+        w, h, fps = (ccfg.get("profile") or [848, 480, 30])[:3]
+        cw, ch, _ = (ccfg.get("color_profile") or self.COLOR_PROFILE)[:3]
         pipeline = rs.pipeline(rs.context())
-        cfg = rs.config()
-        cfg.enable_device(serial)
-        cfg.enable_stream(rs.stream.depth, int(w), int(h), rs.format.z16, int(fps))
-        cfg.enable_stream(rs.stream.color, int(w), int(h), rs.format.rgb8, int(fps))
+
+        def make_cfg(cw_, ch_):
+            cfg = rs.config()
+            cfg.enable_device(serial)
+            cfg.enable_stream(rs.stream.depth, int(w), int(h), rs.format.z16, int(fps))
+            cfg.enable_stream(rs.stream.color, int(cw_), int(ch_), rs.format.rgb8, int(fps))
+            return cfg
+        try:
+            profile = pipeline.start(make_cfg(cw, ch))
+        except RuntimeError as ex:
+            if (cw, ch) == (w, h):
+                raise
+            self.log(f"[CamWorker {cam_idx}] Color {cw}x{ch} no disponible ({ex}); uso {w}x{h}")
+            cw, ch = w, h
+            profile = pipeline.start(make_cfg(cw, ch))
         align = rs.align(rs.stream.color)
         spatial = rs.spatial_filter()
         colorizer = rs.colorizer()
-
-        profile = pipeline.start(cfg)
+        # stream en vivo: como mucho el ancho del perfil de profundidad
+        live_scale = min(1.0, float(w) / float(cw))
+        live_size = (int(round(cw * live_scale)), int(round(ch * live_scale)))
         try:
             sensor = profile.get_device().first_depth_sensor()
             emitter = self._emitter_for(serial, is_master)
@@ -1186,15 +1257,22 @@ class DualRealSenseSource(_DualMixin, BaseSource):
                     sensor.set_option(rs.option.emitter_enabled, 1 if emitter else 0)
                 except Exception as ex:  # noqa: BLE001
                     self.log(f"[CamWorker {cam_idx}] Aviso al configurar emisor IR: {ex}")
-            self._set_cam(cam_idx, emitter=emitter)
+            self._set_cam(cam_idx, emitter=emitter, color_res=[int(cw), int(ch)], depth_res=[int(w), int(h)])
             depth_scale = float(sensor.get_depth_scale())
+            # preset y láser: los del JSON de la cámara y, encima, los pedidos en caliente
+            start_opts = {k: ccfg[k] for k in ("preset", "laser_power") if k in ccfg}
+            with self._lock:
+                start_opts.update(getattr(self, "_depth_opts", {}))
+                opts_ver = getattr(self, "_depth_opts_ver", 0)
+            if start_opts:
+                self._apply_depth_options(cam_idx, sensor, start_opts)
 
             from .protocol import build_meta
             cam_meta = None
             pipeline.wait_for_frames(self.FIRST_FRAME_TIMEOUT_MS)  # calentamiento
             self._set_cam(cam_idx, state="streaming", message=f"En vivo ({role_str})")
-            self._set_status(profile=f"D+RGB {w}x{h} @ {fps} FPS por cámara")
-            self.log(f"[CamWorker {cam_idx}] ({serial}) Transmitiendo {w}x{h}@{fps}.")
+            self._set_status(profile=f"D {w}x{h} + RGB {cw}x{ch} @ {fps} FPS por cámara")
+            self.log(f"[CamWorker {cam_idx}] ({serial}) Transmitiendo D {w}x{h} + RGB {cw}x{ch} @{fps}.")
 
             last_ok = time.time()
             fps_n, fps_t0 = 0, last_ok
@@ -1213,6 +1291,12 @@ class DualRealSenseSource(_DualMixin, BaseSource):
                     fps_now = round(fps_n / (last_ok - fps_t0), 1)
                     fps_n, fps_t0 = 0, last_ok
                 self._cam_frame(cam_idx, fps=fps_now)
+                with self._lock:
+                    new_ver = getattr(self, "_depth_opts_ver", 0)
+                    pending = dict(getattr(self, "_depth_opts", {})) if new_ver != opts_ver else None
+                if pending is not None:
+                    opts_ver = new_ver
+                    self._apply_depth_options(cam_idx, sensor, pending)
 
                 with self._capture_lock:
                     req = self._capture_req
@@ -1237,13 +1321,18 @@ class DualRealSenseSource(_DualMixin, BaseSource):
                                          spatial, colorizer)
                 if visible:
                     if cam_meta is None:  # profundidad alineada al color: mismas intrínsecas y E = I
-                        cam_meta = build_meta(cam_idx + 1, c_intr, depth_scale, c_intr,
+                        li = _scaled_intrinsics(c_intr, live_scale)
+                        cam_meta = build_meta(cam_idx + 1, li, depth_scale, li,
                                               [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0],
                                               extra={"device": f"RealSense D455 ({role_str})", "serial": serial,
                                                      "source": self.name, "cam_idx": cam_idx})
                     s = self.store.get()
                     depth_np = _to_np(depth_f, c_ci.height, c_ci.width, 1, np.uint16)
                     color_np = _to_np(color_f, c_ci.height, c_ci.width, 3, np.uint8)
+                    if live_scale < 1.0:
+                        import cv2
+                        depth_np = cv2.resize(depth_np, live_size, interpolation=cv2.INTER_NEAREST)
+                        color_np = cv2.resize(color_np, live_size, interpolation=cv2.INTER_AREA)
                     self._emit(depth_np, color_np, cam_meta, s, t0)
         finally:
             try:

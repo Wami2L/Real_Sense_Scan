@@ -71,3 +71,24 @@ def rectify_snapshot(snap):
     ni["model"] = "rectificada"
     out["intrinsics"] = ni
     return out
+
+
+def downscale_snapshot(snap, max_width=848):
+    """Copia reducida (para el encuadre en vivo: el color HD de 1280x800 no hace falta ahí).
+    Escala color, profundidad (vecino más cercano) e intrínsecas; la distorsión no cambia."""
+    intr = snap["intrinsics"]
+    w = int(intr["width"])
+    if w <= max_width:
+        return snap
+    k = max_width / w
+    size = (int(round(w * k)), int(round(int(intr["height"]) * k)))
+    out = dict(snap)
+    out["color"] = cv2.resize(snap["color"], size, interpolation=cv2.INTER_AREA)
+    out["depth"] = cv2.resize(snap["depth"], size, interpolation=cv2.INTER_NEAREST)
+    out.pop("heat", None)
+    ni = dict(intr)
+    ni["width"], ni["height"] = size
+    ni["fx"], ni["fy"] = intr["fx"] * k, intr["fy"] * k
+    ni["ppx"], ni["ppy"] = (intr["ppx"] + 0.5) * k - 0.5, (intr["ppy"] + 0.5) * k - 0.5
+    out["intrinsics"] = ni
+    return out

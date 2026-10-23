@@ -52,11 +52,12 @@ def _rel_to_root(path):
     return os.path.relpath(path, root).replace("\\", "/") if inside else path
 
 
-def _skirt_mask(V, band=(0.015, 0.05), low_h=0.014, cell=0.003, margin=0.012):
+def _skirt_mask(V, band=(0.015, 0.05), low_h=0.014, cell=0.003, margin=0.008):
     """Vértices de la "falda" pegada al suelo: trozos de hoja o de mesa que el TSDF une a la base
-    del objeto (píxeles mezclados en el borde). La huella del objeto se toma de su sección algo más
-    arriba (band) y se agranda `margin`; lo que está a menos de `low_h` del suelo y fuera de esa
-    huella, sobra. Objetos más anchos abajo que a 1,5-5 cm conservan su base hasta `margin`."""
+    del objeto (píxeles mezclados en el borde). La huella del objeto es su sección algo más arriba
+    (band: la superficie, sin rellenar su interior: entre las patas de un trípode también hay papel)
+    agrandada `margin`; lo que está a menos de `low_h` del suelo y fuera de esa huella, sobra.
+    Objetos más anchos abajo que a 1,5-5 cm conservan su base hasta `margin`."""
     sel = (V[:, 1] > band[0]) & (V[:, 1] < band[1])
     if sel.sum() < 100:
         return np.zeros(len(V), bool)
@@ -66,11 +67,8 @@ def _skirt_mask(V, band=(0.015, 0.05), low_h=0.014, cell=0.003, margin=0.012):
     occ = np.zeros(shape, np.uint8)
     occ[ij[sel, 0], ij[sel, 1]] = 1
     k = 2 * int(np.ceil(margin / cell)) + 1
-    occ = cv2.morphologyEx(occ, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-    cnts, _ = cv2.findContours(occ, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    fill = np.zeros_like(occ)
-    cv2.drawContours(fill, cnts, -1, 1, -1)                 # la sección es un anillo: rellenarlo
-    fill = cv2.dilate(fill, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    occ = cv2.morphologyEx(occ, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    fill = cv2.dilate(occ, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
     return (V[:, 1] < low_h) & (fill[ij[:, 0], ij[:, 1]] == 0)
 
 
@@ -809,7 +807,7 @@ class ObjectScanSession:
         if len(counts):
             mesh.remove_triangles_by_mask(counts[clusters] < 0.10 * counts.max())
             mesh.remove_unreferenced_vertices()
-        mesh = mesh.filter_smooth_taubin(number_of_iterations=4)
+        mesh = mesh.filter_smooth_taubin(number_of_iterations=2)   # la ráfaga ya quita ruido: más detalle
         if len(mesh.triangles) > target_triangles:
             mesh = mesh.simplify_quadric_decimation(target_triangles)
         mesh.remove_degenerate_triangles()
@@ -847,9 +845,11 @@ class ObjectScanSession:
                 "result": self.result, "error": self.error}
 
     def discard(self):
+        """Cierra la sesión. Las tomas se borran solo si no llegaron a dar un objeto: las de un
+        objeto creado hacen falta para re-texturizarlo (Blender) y para reprocesarlo."""
         import shutil
         with self._lock:
             if self.state == "processing":
                 raise RuntimeError("No se puede descartar mientras se procesa.")
-            if os.path.isdir(self.dir):
+            if self.result is None and os.path.isdir(self.dir):
                 shutil.rmtree(self.dir, ignore_errors=True)

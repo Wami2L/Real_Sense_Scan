@@ -113,7 +113,12 @@ def bake(mesh, views, size=2048, max_triangles=80000, edge_ramp_px=10.0, log=Non
     log = log or (lambda *_: None)
     m = _prepare(mesh, max_triangles)
     tm = o3d.t.geometry.TriangleMesh.from_legacy(m)
-    stretch, charts, _ = tm.compute_uvatlas(size=size, gutter=4.0, max_stretch=0.2, parallel_partitions=1)
+    try:   # una partición: islas grandes (una vista por isla queda más limpia)
+        stretch, charts, _ = tm.compute_uvatlas(size=size, gutter=4.0, max_stretch=0.2, parallel_partitions=1)
+    except RuntimeError as ex:  # UVAtlas puede fallar con algún vértice no manifold: por trozos sí sale
+        log(f"atlas UV de una pieza falló ({ex}); reintento por particiones")
+        tm = o3d.t.geometry.TriangleMesh.from_legacy(m)
+        stretch, charts, _ = tm.compute_uvatlas(size=size, gutter=4.0, max_stretch=0.2, parallel_partitions=8)
     log(f"atlas UV: {charts} islas, estiramiento {stretch:.3f}")
     P, N, inside = _texel_map(tm, size)
     idx = np.flatnonzero(inside)

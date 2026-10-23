@@ -110,7 +110,7 @@ async function framingLoop() {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || r.status);
       if (!framing) break;
-      $('encuadre').src = d.imagen;
+      renderViews(d);
       $('stage-empty').classList.add('hidden');
       renderChips(d);
       drawCoverage(d.vista);
@@ -124,6 +124,44 @@ async function framingLoop() {
     if (dt < 300) await new Promise((r) => setTimeout(r, 300 - dt));
   }
 }
+
+// ---------------- una o dos cámaras + calibración ----------------
+const ORIGEN = { base: ['hoja', true], 'calibración': ['calibración', null], mesa: ['mesa', false] };
+function renderViews(d) {
+  const cams = d.camaras || [{ camara: 'cam1', imagen: d.imagen, origen_pose: d.base?.ok ? 'base' : 'mesa', base: d.base }];
+  const caption = (c) => {
+    const [txt, ok] = ORIGEN[c.origen_pose] || ['—', false];
+    const n = c.base?.markers?.length;
+    return `${c.camara === 'cam2' ? 'Cam 2' : 'Cam 1'} · pose por <b class="${ok === false ? 'warn' : ''}">${txt}</b>` +
+           (c.origen_pose === 'base' && n ? ` (${n} marcadores)` : '') + (c.ok ? '' : ' · sin objeto');
+  };
+  $('encuadre').src = cams[0].imagen;
+  $('cap1').innerHTML = cams.length > 1 || d.dual === false ? caption(cams[0]) : '';
+  const two = cams.length > 1;
+  $('fig2').classList.toggle('hidden', !two);
+  $('vistas').classList.toggle('dual', two);
+  if (two) { $('encuadre2').src = cams[1].imagen; $('cap2').innerHTML = caption(cams[1]); }
+  const cal = d.calibracion;
+  const box = $('calib');
+  box.classList.toggle('hidden', !cal || !two);   // con una sola cámara no aporta
+  if (!cal) return;
+  let txt = !cal.calibrada ? 'Sin calibración dual' : cal.fecha ? `Calibración dual del ${esc(cal.fecha.slice(0, 16))}` : 'Calibración dual';
+  if (cal.diferencia_mm != null) {
+    const okc = cal.diferencia_mm < 15 && cal.diferencia_deg < 1.5;
+    txt += ` · la hoja mide <b class="${okc ? 'ok' : 'bad'}">${cal.diferencia_mm} mm / ${cal.diferencia_deg}°</b>` +
+           (okc ? ' (coherente)' : ' (desajustada: al procesar se corrige, o calibra con la hoja)');
+  } else if (two) {
+    txt += ' · para medirla, que las dos cámaras vean la hoja';
+  }
+  $('calib-txt').innerHTML = txt;
+  $('btn-calib-hoja').classList.toggle('hidden', !cal.medible);
+}
+$('btn-calib-hoja').addEventListener('click', async () => {
+  try {
+    const r = await api('/api/objscan/calibrar_con_hoja', { method: 'POST' });
+    toast(`Calibración guardada con la hoja (${r.muestras} medidas, dispersión ${r.dispersion_mm} mm).`);
+  } catch (e) { toast(e.message, true); }
+});
 
 function chip(label, value, ok) {
   return `<span class="chip ${ok === true ? 'ok' : ok === false ? 'bad' : ''}">${esc(label)} <b>${esc(value)}</b></span>`;

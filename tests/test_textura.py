@@ -161,3 +161,10 @@ def test_falda_de_papel_se_quita():
     V = np.vstack((box, skirt))
     cut = _skirt_mask(V)
     assert cut[len(box):].mean() > 0.95 and cut[:len(box)].mean() < 0.001
+
+
+def test_cerrar_sesion_terminada_conserva_las_tomas(textured):
+    """«Escanear otro objeto» cierra la sesión: si ya creó un objeto, sus tomas se quedan."""
+    s, _ = textured
+    s.discard()
+    assert os.path.isdir(s.dir) and any(d.startswith("vista_") for d in os.listdir(s.dir))

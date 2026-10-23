@@ -108,3 +108,37 @@ cualquier toma con diferencia media < 18/255.
    elevación cercana no dispara. Bajar el umbral cuando la elevación difiere, o pedir la segunda vuelta en
    la interfaz cuando la primera esté completa.
 6. Hoja impresa al 91 %: se corrige sola, pero reimprimir al 100 % mejora el tamaño de los marcadores.
+
+## 7. Producción con RealSense (2026-10-23)
+
+Tras el trípode (patas de ~1 cm, aluminio brillante): el techo de la D455 está cerca para objetos finos o
+brillantes, pero quedaba margen. Cambios:
+
+- **Color 1280×800** (`DualRealSenseSource.COLOR_PROFILE`, o `color_profile` por cámara en el JSON): los
+  snapshots llevan el color completo del sensor RGB y la profundidad alineada a él (textura ~1,5× más nítida);
+  el stream en vivo se reduce al ancho de la profundidad (848) para no cargar el visor. El encuadre de
+  `/objetos` analiza una copia reducida (`optica.downscale_snapshot`). Toma: ~3-3,8 s (antes ~2,4 s).
+- **Ráfaga con color HD**: la profundidad alineada a 1280×800 cambia un 2-3 % de los píxeles en los bordes
+  aun con la escena quieta; un cuadro "se movió" si cambia 2 puntos más que la mediana de la ráfaga (tope 8 %).
+- **Preset y láser medidos con la cámara real** (`set_depth_options`, `POST /api/objscan/sensor`):
+
+  | Configuración | Píxeles del objeto (trípode a 0,5 m) |
+  |---|---|
+  | default, láser 150 mW (se queda) | ~4 900 |
+  | default, láser máximo | ~3 500 |
+  | high_density, láser máximo | ~1 900 |
+  | medium_density, láser máximo | ~1 000-1 300 |
+  | high_accuracy, láser máximo | toma descartada (sin profundidad en las patas) |
+
+  El metal brillante satura el IR: Intel recomienda High Accuracy para objetos, pero aquí empeora. Se quedan
+  los valores por defecto; el control en caliente queda para objetos mate/oscuros.
+- **Malla**: Taubin 2 pasadas (antes 4) y "falda" sin rellenar el interior de la sección (entre las patas de
+  un trípode también había papel).
+- **Bug**: «Escanear otro objeto» borraba las tomas de una sesión ya procesada (se perdieron las del
+  trípode). Ahora solo se borran si la sesión no llegó a dar un objeto.
+- **Dos cámaras en `/objetos`**: imagen de cada una con el origen de su pose (hoja / calibración / mesa); si
+  la Cam 2 no ve la hoja, se encuadra con la calibración dual. Si las dos ven la hoja, se mide cuánto se
+  aparta la calibración y **«Calibrar con la hoja»** guarda la mediana de las últimas medidas
+  (`POST /api/objscan/calibrar_con_hoja`; test: < 8 mm y < 0,8° frente a la verdad).
+- **Unity**: la cámara de `ScanWorld` ya no queda fija en un objeto: órbita libre (WASD/QE mueve el foco,
+  botón central desplaza), Tab/←→/1-9 entre objetos, H vista general y F modo vuelo.

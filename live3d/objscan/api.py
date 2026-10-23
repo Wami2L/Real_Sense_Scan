@@ -25,6 +25,7 @@ from aiohttp import web
 from .base import LAYOUTS
 from .library import ROOT_DIR, Library
 from .rafaga import capture_burst
+from .optica import downscale_snapshot
 from .segment import WorkVolume, analyze, preview_image
 from .session import ObjectScanSession, view_angles
 
@@ -53,7 +54,13 @@ def find_blender():
     return cands[0] if cands else None
 
 
+# Ajustes de profundidad para escanear objetos de cerca (medidos con la D455, plan 14 §7): con
+# "high_accuracy" o el láser al máximo, el metal brillante satura el IR y se pierde el objeto.
+SCAN_DEPTH_OPTIONS = {"preset": "default", "laser_power": 150}
+
+
 def setup_objscan_routes(app, library=None):
+    app["objscan_T21"] = []          # últimas medidas cam2->cam1 por la hoja (las dos cámaras la ven)
     lib = library or Library()
     app["objscan"] = None
     app["objscan_lock"] = asyncio.Lock()
@@ -63,6 +70,28 @@ def setup_objscan_routes(app, library=None):
 
     def _snap_cam1(snap):
         return snap.get("cam1") or snap.get("cam2") or snap
+
+    def _calibration_report(src, T21, res):
+        """Calibración dual vigente y, si las dos cámaras ven la hoja, cuánto se aparta de lo que
+        miden los marcadores en este cuadro (y esa medida, para aplicarla con un clic)."""
+        cfg = (getattr(src, "config", None) or {}).get("extrinsics_cam2_to_cam1") or {}
+        rep = {"calibrada": bool(cfg.get("is_calibrated")), "fecha": cfg.get("calibration_date"),
+               "metodo": cfg.get("method")}
+        Ts = {k: inf["T_cam_to_base"] for k, inf, _ in res if inf.get("origen_pose") == "base"}
+        if "cam1" in Ts and "cam2" in Ts:
+            meas = np.linalg.inv(Ts["cam1"]) @ Ts["cam2"]          # cam2 -> cam1 según la hoja
+            hist = app["objscan_T21"]
+            hist.append(meas)
+            del hist[:-8]
+            if T21 is not None:
+                d = np.linalg.inv(np.asarray(T21, np.float64)) @ meas
+                rep["diferencia_mm"] = round(float(np.linalg.norm(d[:3, 3])) * 1000, 1)
+                rep["diferencia_deg"] = round(float(np.degrees(np.arccos(np.clip((np.trace(d[:3, :3]) - 1) / 2, -1, 1)))), 2)
+            rep["medible"] = True
+        else:
+            app["objscan_T21"].clear()
+            rep["medible"] = False
+        return rep
 
     async def page(_r):
         return web.FileResponse(os.path.join(WEB_DIR, "index.html"))
@@ -100,14 +129,30 @@ def setup_objscan_routes(app, library=None):
             st = src.status() if hasattr(src, "status") else {}
             why = st.get("message") if st.get("state") not in (None, "streaming") else str(e)
             return web.json_response({"error": f"No se pudo leer la cámara: {why}"}, status=503)
-        cam1 = _snap_cam1(snap)
+        parts = [(k, snap[k]) for k in ("cam1", "cam2") if snap.get(k) is not None] or [("cam1", snap)]
+        T21 = snap.get("extrinsics")
+        scale = s.scale if s else 1.0
 
         def work():
-            info = analyze(cam1, layout, vol, use_base=use_base, scale=s.scale if s else 1.0)
-            img = preview_image(info["snap"], info["mask"], info)
-            return info, img
-        info, img = await loop.run_in_executor(None, work)
+            res = []
+            T1 = None
+            for k, sp in parts:
+                fb = None
+                if k == "cam2" and T1 is not None and T21 is not None:
+                    fb = T1 @ np.asarray(T21, np.float64) @ (s.cam2_corr if s else np.eye(4))
+                info = analyze(downscale_snapshot(sp), layout, vol, use_base=use_base, scale=scale, T_fallback=fb)
+                if k == "cam1" and info.get("origen_pose") == "base":
+                    T1 = info["T_cam_to_base"]
+                res.append((k, info, preview_image(info["snap"], info["mask"], info)))
+            return res
+        res = await loop.run_in_executor(None, work)
+        k0, info, img = res[0]
         out = {k: v for k, v in info.items() if k not in ("mask", "T_cam_to_base", "snap")}
+        out["camaras"] = [{"camara": k, "imagen": _jpeg_data_url(im, 72), "origen_pose": inf.get("origen_pose"),
+                           "base": inf.get("base"), "ok": inf.get("ok"), "puntos": inf.get("points"),
+                           "extent": inf.get("extent"), "distance_m": inf.get("distance_m")}
+                          for k, inf, im in res]
+        out["calibracion"] = _calibration_report(src, T21, res)
         T = info.get("T_cam_to_base")
         if T is not None and (info.get("base") or {}).get("ok"):
             # para la captura automática: desde dónde mira la cámara y cuánto difiere de lo ya tomado
@@ -115,10 +160,13 @@ def setup_objscan_routes(app, library=None):
             out["vista"]["T"] = np.round(T, 5).tolist()
             if s is not None:
                 out["vista"]["novedad_deg"] = round(s.novelty_deg(T), 1)
-        out["imagen"] = _jpeg_data_url(img)
+        out["imagen"] = out["camaras"][0]["imagen"]
         out["dual"] = snap.get("cam1") is not None and snap.get("cam2") is not None
         if snap.get("degraded"):
-            out["warnings"] = out.get("warnings", []) + ["Solo una cámara en vivo: se escanea con ella."]
+            off = [c for c in (src.cameras_status() if hasattr(src, "cameras_status") else []) if c.get("state") != "streaming"]
+            who = ", ".join(f"Cam {c['idx'] + 1} ({str(c.get('serial', ''))[-4:]})" for c in off) or "Una cámara"
+            out["warnings"] = out.get("warnings", []) + [f"{who} no está en vivo (revisa su cable USB 3): se escanea "
+                                                         "con la otra."]
         out["simulada"] = bool(getattr(src, "simulated", False))
         return web.json_response(out)
 
@@ -172,6 +220,44 @@ def setup_objscan_routes(app, library=None):
         except (RuntimeError, AttributeError) as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response(s.summary())
+
+    async def sensor_opts(r):
+        """Preset visual, potencia del láser y emisor de las cámaras. Sin cuerpo: los de escaneo."""
+        src = app.get("source")
+        if src is None or not hasattr(src, "set_depth_options"):
+            return web.json_response({"error": "la fuente no admite ajustes de profundidad"}, status=400)
+        data = await r.json() if r.can_read_body else {}
+        opts = {k: data[k] for k in ("preset", "laser_power", "emitter") if k in data} or SCAN_DEPTH_OPTIONS
+        try:
+            return web.json_response({"opciones": src.set_depth_options(**opts)})
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+
+    async def calibrar_con_hoja(_r):
+        """Calibración dual con la hoja de escaneo: mediana de las últimas medidas del encuadre en las
+        que las DOS cámaras veían los marcadores (pose de cada una respecto a la hoja)."""
+        src = app.get("source")
+        hist = app["objscan_T21"]
+        if len(hist) < 3:
+            return web.json_response({"error": "Las dos cámaras tienen que ver la hoja unos segundos"}, status=400)
+        if not hasattr(src, "set_extrinsics"):
+            return web.json_response({"error": "La fuente actual no es dual"}, status=400)
+        Ts = np.stack(hist[-8:])
+        t = np.median(Ts[:, :3, 3], axis=0)
+        U, _, Vt = np.linalg.svd(Ts[:, :3, :3].mean(0))     # media de rotaciones (proyección a SO(3))
+        Rm = U @ Vt
+        if np.linalg.det(Rm) < 0:
+            U[:, 2] *= -1
+            Rm = U @ Vt
+        T = np.eye(4)
+        T[:3, :3], T[:3, 3] = Rm, t
+        spread = float(np.max(np.linalg.norm(Ts[:, :3, 3] - t, axis=1))) * 1000
+        try:
+            src.set_extrinsics(T, method="hoja de escaneo vista por las dos cámaras (marcadores + plano)",
+                               source="objetos", muestras=len(Ts), dispersion_mm=round(spread, 1))
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        return web.json_response({"ok": True, "muestras": len(Ts), "dispersion_mm": round(spread, 1)})
 
     async def aplicar_calibracion(_r):
         """Aplica a la calibración dual la corrección que midió el escaneo (Cam 2 vs marcadores)."""
@@ -229,3 +315,5 @@ def setup_objscan_routes(app, library=None):
     app.router.add_post("/api/objscan/procesar", procesar)
     app.router.add_post("/api/objetos/{oid}/blender", abrir_blender)
     app.router.add_post("/api/objscan/aplicar_calibracion", aplicar_calibracion)
+    app.router.add_post("/api/objscan/sensor", sensor_opts)
+    app.router.add_post("/api/objscan/calibrar_con_hoja", calibrar_con_hoja)

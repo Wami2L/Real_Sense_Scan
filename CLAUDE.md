@@ -42,7 +42,10 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
 - `optica.py`: rectifica color+profundidad (coeficientes de la lente en las intrínsecas del snapshot) ANTES de nada.
 - `segment.py`: objeto = volumen de trabajo (cilindro sobre la base) o, sin base, plano de la mesa + grupo central.
   Usa `D455_OBJ` (Min-Z 0,30 m: a 848×480 la D455 mide desde ~0,34 m; el 0,52 de `alignment.D455` es de 1280×720).
-- `rafaga.py`: cada toma = mediana de 6 cuadros de profundidad (descarta los movidos). `api.tomar` usa `capture_burst`.
+- `rafaga.py`: cada toma = mediana de 6 cuadros de profundidad (descarta los movidos: umbral relativo a la mediana
+  de la ráfaga, la profundidad alineada a HD cambia 2-3 % en bordes aun quieta). `api.tomar` usa `capture_burst`.
+- `api.encuadre`: las dos cámaras (imagen y origen de la pose: hoja / calibración / mesa) y, si ambas ven la hoja,
+  la diferencia con la calibración dual; `POST /api/objscan/calibrar_con_hoja` la guarda.
 - `session.py`: poses base > calibración (Cam 2) > icp > referencia. ICP **point-to-plane** (el ICP con color sesga
   con fija y objeto que gira). Dual: UNA corrección común de la calibración con todas las tomas (consenso) y la
   Cam 2 se descarta si no encaja. TSDF **uniforme** solo del objeto, sin la "falda" de papel (`_skirt_mask`).
@@ -55,6 +58,9 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
   `sintetico.py` + `fuente.py` (escena con verdad de referencia; `python app.py --synthetic-object`).
 
 - `live3d/capture.py`: fuentes `RealSenseSource`, `DualRealSenseSource`, `SyntheticSource`, `SyntheticDualSource`.
+  Dual: color a 1280×800 (`COLOR_PROFILE` o `color_profile` por cámara) con la profundidad alineada en los
+  snapshots; el stream en vivo se reduce a 848 de ancho. `set_depth_options(preset, laser_power, emitter)` en
+  caliente (`POST /api/objscan/sensor`). Medido: High Accuracy y láser al máximo empeoran en metal brillante.
   Llaman a `on_frame(CapturedFrame)` desde su hilo; snapshots vía `get_snapshot()` (petición al hilo de captura).
 - `live3d/protocol.py`: protocolo binario `RSF1` (cabecera 32 B, profundidad uint16 zlib + color JPEG/raw, meta JSON).
   `flags` bit 0 = índice de cámara. Solo depende de stdlib+numpy (debe seguir importable desde Blender).

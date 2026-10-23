@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/objetos-ui/objetos.css?v=2">
+  <link rel="stylesheet" href="/objetos-ui/objetos.css?v=7">
   <script type="importmap">
     { "imports": {
         "three": "/assets/vendor/three.module.min.js",
@@ -40,9 +40,15 @@
   <!-- ===================== ESCANEAR ===================== -->
   <main id="view-escanear" class="layout">
     <section class="stage">
-      <img id="encuadre" alt="Encuadre: el objeto aparece resaltado en verde">
+      <div class="vistas" id="vistas">
+        <figure><img id="encuadre" alt="Encuadre: el objeto aparece resaltado en verde"><figcaption id="cap1"></figcaption></figure>
+        <figure class="hidden" id="fig2"><img id="encuadre2" alt="Encuadre de la Cam 2"><figcaption id="cap2"></figcaption></figure>
+      </div>
       <canvas id="visor3d" class="hidden"></canvas>
-      <div class="chips" id="chips"></div>
+      <div class="top-left">
+        <div class="chips" id="chips"></div>
+        <div class="calib hidden" id="calib"><span id="calib-txt"></span><button id="btn-calib-hoja" class="ghost small hidden">Calibrar con la hoja</button></div>
+      </div>
       <ul class="warnings" id="warnings"></ul>
       <div class="stage-empty hidden" id="stage-empty">Esperando la cámara…</div>
     </section>
@@ -154,6 +160,6 @@
     </article>
   </template>
 
-  <script type="module" src="/objetos-ui/objetos.js?v=3"></script>
+  <script type="module" src="/objetos-ui/objetos.js?v=6"></script>
 </body>
 </html>

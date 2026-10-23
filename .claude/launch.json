@@ -30,6 +30,19 @@
       "port": 5010
     },
     {
+      "name": "dual-sim",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-u",
+        "app.py",
+        "--synthetic",
+        "--dual",
+        "--port",
+        "5004"
+      ],
+      "port": 5004
+    },
+    {
       "name": "objetos-sim",
       "runtimeExecutable": "python",
       "runtimeArgs": [

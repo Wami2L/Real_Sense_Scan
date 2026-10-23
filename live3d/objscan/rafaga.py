@@ -8,7 +8,9 @@ al último (algo se movió) se descartan.
 import numpy as np
 
 NEAR_M = 1.5          # solo cuenta la escena cercana (el fondo lejano es ruidoso y no importa)
-MOVED_FRAC = 0.02     # > 2 % de los píxeles cercanos con un salto grande = algo se movió
+MOVED_FRAC = 0.02     # un cuadro "se movió" si cambia > 2 puntos más que el cuadro típico de la ráfaga
+                      # (con color HD la profundidad alineada cambia ~2-3 % en los bordes aun quieta)
+MOVED_CAP = 0.08      # y nunca más del 8 % (si se mueve toda la ráfaga, la mediana también sube)
 
 
 def change_frac(a, b, depth_scale=0.001):
@@ -29,7 +31,8 @@ def fuse_depths(snaps):
     ref = snaps[-1]
     ds = ref.get("depth_scale", 0.001)
     fracs = [change_frac(s["depth"], ref["depth"], ds) for s in snaps[:-1]]
-    keep = [s for s, f in zip(snaps[:-1], fracs) if f < MOVED_FRAC] + [ref]
+    limit = min((float(np.median(fracs)) if fracs else 0.0) + MOVED_FRAC, MOVED_CAP)
+    keep = [s for s, f in zip(snaps[:-1], fracs) if f < limit] + [ref]
     out = dict(ref)
     out["color"] = keep[len(keep) // 2]["color"]           # el del centro de la ráfaga
     out["burst_cambio"] = [round(f, 4) for f in fracs]

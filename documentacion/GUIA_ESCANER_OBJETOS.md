@@ -67,9 +67,20 @@ o por separado: `python app.py` · `python -m live3d.unity_link`. Sin cámaras s
   **re-texturiza solo** con las fotos de la sesión.
 - Con textura, también tienes `objeto.obj` + `textura.jpg` en la carpeta del objeto para cualquier programa.
 
+### Con las dos cámaras
+
+El encuadre muestra **las dos imágenes**, cada una con de dónde sale su pose: **hoja** (ve los marcadores),
+**calibración** (no ve la hoja: se coloca con la calibración dual) o **mesa** (sin base). Si las dos ven la
+hoja, arriba aparece cuánto se aparta la calibración guardada de lo que miden los marcadores; con el botón
+**Calibrar con la hoja** se guarda la nueva calibración en un clic. Si una cámara no aparece, el aviso dice
+cuál (cable USB 3).
+
 ## 4. Unity (VR ScanWorld)
 
-Abre la escena **ScanWorld** y dale a **Play**. Con el enlace (5010) en marcha, cada objeto publicado
+Abre la escena **ScanWorld** y dale a **Play**. Para moverte: **arrastrar** gira, **rueda** acerca, botón
+**central** (o Shift+arrastrar) desplaza, **WASD/QE** mueve el foco por la sala, **Tab / ← → / 1-9** salta
+entre objetos, **H** vista general y **F** modo vuelo (botón derecho para mirar). Abajo a la izquierda está la
+ayuda. Con el enlace (5010) en marcha, cada objeto publicado
 aparece sobre un pedestal construyéndose; si lo vuelves a publicar, se reconstruye. **R** repite el efecto.
 Arriba a la izquierda se ve el estado del enlace.
 
