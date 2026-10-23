@@ -26,7 +26,9 @@ def load_core(ply: SplatPly, size=1_000_000):
         "pos": np.empty((n, 3), np.float32), "alpha": np.empty(n, np.float32),
         "sigma": np.empty((n, 3), np.float32), "color": np.empty((n, 3), np.float32),
         "sh_amp": np.zeros(n, np.float32), "finite": np.empty(n, bool),
+        "normal": np.zeros((n, 3), np.float32),
     }
+    has_rot = all(f"rot_{i}" in ply.props for i in range(4))
     per = ply.sh_rest // 3
     with np.errstate(over="ignore", invalid="ignore"):
         for s, b in ply.chunks(size):
@@ -49,6 +51,17 @@ def load_core(ply: SplatPly, size=1_000_000):
             out["color"][s:e] = np.clip(0.5 + SH_C0 * dc, 0, 1)
             out["sh_amp"][s:e] = amp
             out["finite"][s:e] = fin
+            if has_rot:
+                # Normal = eje local de σ mínima, rotado: columna de R(q) (w, x, y, z).
+                q = np.stack([b[f"rot_{i}"] for i in range(4)], 1).astype(np.float64)
+                q /= np.maximum(np.linalg.norm(q, axis=1, keepdims=True), 1e-12)
+                w, x, y, z = q.T
+                cols = (np.stack([1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)], 1),
+                        np.stack([2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)], 1),
+                        np.stack([2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)], 1))
+                k = np.argmin(ls, axis=1)
+                nrm = np.choose(k[:, None], cols)
+                out["normal"][s:e] = np.nan_to_num(nrm)
     return out
 
 

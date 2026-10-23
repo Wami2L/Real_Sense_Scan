@@ -127,11 +127,12 @@ def cmd_limpiar(a):
     return 0
 
 
-def cmd_estacion(a):
-    """Poda por importancia desde una estación (Quest 2): <entorno>/estacion_<nombre>_<K>k.ply."""
-    from live3d.splats import estacion
-    from live3d.splats.ply import write_ply
-    t0 = time.time()
+def station_setup(a):
+    """
+    Entrada de 'estacion' y 'lod': salida de 'limpiar' (suelo en y = 0, con su .json) y el centro de la estación
+    (vista de camaras.json o 'x,z' de Unity). Devuelve (ply, manifiesto, cámaras, (ux, uz), centro en el suelo
+    en coordenadas del archivo).
+    """
     ply = SplatPly.open(a.ply)
     man_in_path = a.ply[:-4] + ".json"
     if not os.path.exists(man_in_path):
@@ -139,19 +140,28 @@ def cmd_estacion(a):
     with open(man_in_path, encoding="utf-8") as f:
         man_in = json.load(f)
     t = np.array(man_in["traslacion_restada"])
-    base = entorno_dir(a.ply)
-    with open(os.path.join(base, "camaras.json"), encoding="utf-8") as f:
+    with open(os.path.join(entorno_dir(a.ply), "camaras.json"), encoding="utf-8") as f:
         cams = json.load(f)
     if a.vista:
         ux, _, uz = next(v["pos"] for v in cams["vistas"] if v["nombre"] == a.vista)
     else:
         ux, uz = (float(c) for c in a.centro.split(","))
     # Unity (x, y, z) -> archivo original RDF (x, -y, z) -> archivo de entrada (restada la traslación).
-    center = np.array([ux - t[0], 0.0, uz - t[2]])           # punto del suelo (suelo en y = 0)
+    center = np.array([ux - t[0], 0.0, uz - t[2]])
+    return ply, man_in, cams, (ux, uz), center
+
+
+def cmd_estacion(a):
+    """Poda por importancia desde una estación (Quest 2): <entorno>/estacion_<nombre>_<K>k.ply."""
+    from live3d.splats import estacion
+    from live3d.splats.ply import write_ply
+    t0 = time.time()
+    ply, man_in, cams, (ux, uz), center = station_setup(a)
+    base = entorno_dir(a.ply)
     core = analisis.load_core(ply)
     pts = estacion.view_points(center, radius=a.radio)
     imp = estacion.importance(core["pos"], core["alpha"], core["sigma"], core["finite"], pts,
-                              max_dist=a.distancia)
+                              max_dist=a.distancia, normal=core["normal"])
     visible = int((imp > 0).sum())
     print(f"Estación '{a.nombre}' en Unity ({ux:.2f}, {uz:.2f}): {len(pts)} puntos de vista, "
           f"{visible:,} splats visibles de {ply.count:,} ({time.time() - t0:.0f} s)")
@@ -184,6 +194,48 @@ def cmd_estacion(a):
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"fov_v": cams.get("fov_v", 90), "vistas": vistas}, f, indent=2)
     print(f"Cámaras de la estación en {path}")
+    return 0
+
+
+def cmd_lod(a):
+    """LOD por fusión desde una estación (plan 15 §12.4): <entorno>/lod_<nombre>_<θ>.ply por cada ángulo."""
+    import gc
+    from live3d.splats import estacion, lod
+    from live3d.splats.ply import write_columns
+    t0 = time.time()
+    ply, man_in, cams, (ux, uz), center = station_setup(a)
+    base = entorno_dir(a.ply)
+    up = np.array([0.0, -1.0, 0.0])                         # RDF: arriba = -y; suelo en y = 0
+    eye = center + a.ojos * up
+    visible = None
+    if not a.sin_oclusion:
+        core = analisis.load_core(ply)
+        pts = estacion.view_points(center, radius=a.radio)
+        imp = estacion.importance(core["pos"], core["alpha"], core["sigma"], core["finite"], pts,
+                                  normal=core["normal"])
+        visible = (imp > 0) & core["finite"]
+        del core, imp
+        gc.collect()
+        print(f"Oclusión: {visible.sum():,} splats visibles de {ply.count:,} ({time.time() - t0:.0f} s)")
+    cols = lod.read_columns(ply, visible, sh_degree=a.sh)
+    pos = np.stack([cols["x"], cols["y"], cols["z"]], 1)
+    for ang in [float(s) for s in a.angulos.split(",")]:
+        theta = np.radians(ang)
+        key, size = lod.cell_keys(pos, eye, theta, r_station=a.radio, radial=a.radial)
+        out, st = lod.merge(cols, key, size, inflate=a.inflar)
+        name = (f"lod_{a.nombre}_{ang:g}" + (f"_r{a.radial:g}" if a.radial != 1 else "")
+                + (f"_inf{a.inflar:g}" if a.inflar > 0 else "")).replace(".", "p")
+        path = os.path.join(base, name + ".ply")
+        n = write_columns(path, out, comments=[
+            f"lod {a.nombre}: fusion desde la estacion, theta {ang} grados, radio {a.radio} m, inflado {a.inflar}"])
+        man = dict(man_in, salida=path, partes=[path], splats_salida=n, sh_salida=min(a.sh, ply.sh_degree),
+                   lod={"nombre": a.nombre, "centro_unity_xz": [ux, uz], "radio": a.radio, "theta_grados": ang,
+                        "inflado": a.inflar, "radial": a.radial, "oclusion": not a.sin_oclusion,
+                        "fuente": a.ply, **st})
+        with open(os.path.join(base, name + ".json"), "w", encoding="utf-8") as f:
+            json.dump(man, f, indent=2, ensure_ascii=False)
+        print(f"  {name}: {n:,} splats ({st['intactos']:,} intactos + {st['fusionadas']:,} fusionadas de "
+              f"{st['splats_fusionados']:,}), {os.path.getsize(path) / 2**20:.0f} MB ({time.time() - t0:.0f} s)")
     return 0
 
 
@@ -324,6 +376,20 @@ def main():
     p.add_argument("--distancia", type=float, help="ignorar splats más lejos que esto (m)")
     p.add_argument("--sh", type=int, default=3)
     p.set_defaults(func=cmd_estacion)
+    p = sub.add_parser("lod", help="LOD por fusión de splats desde una estación (Quest 2)")
+    p.add_argument("ply", help="salida de 'limpiar' (con su .json)")
+    p.add_argument("--nombre", required=True)
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--vista", help="centro = posición de esta vista de camaras.json")
+    g.add_argument("--centro", help="centro 'x,z' en coordenadas de Unity")
+    p.add_argument("--angulos", default="0.3,0.5,0.8", help="lado angular de las celdas en grados (varios)")
+    p.add_argument("--radio", type=float, default=0.75, help="radio de la zona de movimiento (m)")
+    p.add_argument("--ojos", type=float, default=1.6, help="altura del centro de la rejilla sobre el suelo (m)")
+    p.add_argument("--inflar", type=float, default=0.0, help="ensancha cada fusionada (fracción del lado de celda)")
+    p.add_argument("--radial", type=float, default=1.0, help="largo de las celdas a lo largo del rayo (× lado)")
+    p.add_argument("--sin-oclusion", action="store_true", help="no descartar lo que no se ve desde la estación")
+    p.add_argument("--sh", type=int, default=1)
+    p.set_defaults(func=cmd_lod)
     p = sub.add_parser("comparar", help="PSNR/SSIM y tiempos de variantes del banco de Unity")
     p.add_argument("bench", help="carpeta del banco (<entorno>/bench)")
     p.add_argument("--referencia", required=True)

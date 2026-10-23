@@ -459,7 +459,7 @@ modificadas**: las variantes optimizadas son solo para uso local y no van en nin
    frame) y los tiempos crecen sin parar. El banco avanza un render por tick del editor y vuelve a medir la primera
    vista al final como control.
 
-### 12.4 Siguiente paso propuesto (G2Q)
+### 12.4 Siguiente paso propuesto (G2Q) — hecho, ver §12.5
 **LOD por distancia desde la estación, fusionando splats** (en lugar de borrarlos): rejilla adaptativa alrededor de la
 estación con celda ∝ distancia (≈0,4-0,6° de ángulo por celda); dentro de cada celda, una sola gaussiana por
 ajuste de momentos (media y covarianza ponderadas por alfa×área, color/SH ponderados, alfa que conserva la "tinta").
@@ -467,12 +467,50 @@ Cubre toda la esfera con ~150-250 k splats y conserva el paralaje (es 3D, a dife
 (< 3-4 m) se queda la poda por importancia actual a resolución completa. Medir con el mismo banco y, si el lejano
 se ve demasiado blando, pasar a la malla horneada (§11.3-E) o a la destilación (§11.3-D).
 
+### 12.5 LOD por fusión desde la estación (implementado, `tools/splats.py lod`, `live3d/splats/lod.py`)
+Rejilla esférica alrededor de la estación (celdas de θ grados vistas desde el centro, profundidad ∝ distancia al
+borde de la zona de movimiento); por celda, una gaussiana por ajuste de momentos (media/covarianza ponderadas por
+tinta α·πσ1σ2, color y SH promediados, α = 1 − exp(−tinta/área)); las celdas de un solo splat se copian intactas.
+
+**Fallo encontrado y corregido en la oclusión**: las paredes altas de la nave, vistas muy de canto, se ocultaban a
+sí mismas (agujeros negros en la poda y en el primer LOD). Dos causas: (1) un splat plano visto de canto proyecta casi
+una línea, pero se dibujaba en el mapa como un disco de 2σ → ahora el disco se escorza con la normal del splat
+(eje de σ mínima, `load_core` la calcula) y fuera de su celda escribe d + 2σ1; (2) vista de canto, una celda del mapa
+abarca metros de la misma pared → tolerancia proporcional al mayor salto de profundidad con las celdas vecinas.
+Test sintético: pared de 40 m vista de canto, visible > 97 % (antes 16 %). Splats visibles: 6,4 M → 8,3 M.
+
+Resultados (estación "nave", 9 cámaras: 6 direcciones, bóveda y dos bordes a 0,75 m; referencia SH3 completa
+~111-165 ms; tiempos = coste de los splats en un ojo 1440×1584, RTX 3050, sin los ~9 ms fijos):
+
+| Variante | Splats | ms | PSNR (peor vista) | SSIM |
+|---|---|---|---|---|
+| Poda por importancia 150 k | 150.000 | 5,9 | 14,8 (13,4) | 0,66 |
+| LOD 2,5° | 62.720 | 3,7 | 20,3 (19,8) | 0,71 |
+| **LOD 2°** | 99.681 | 6,7 | 20,8 (20,3) | 0,72 |
+| LOD 1,2° radial ×3 | 138.118 | 8,1 | 21,1 (20,5) | 0,73 |
+| **LOD 1,5°** | 175.636 | 11,0 | 21,5 (20,9) | 0,73 |
+| LOD 1° | 362.610 | 18,6 | 22,5 (21,9) | 0,75 |
+| **LOD 0,6°** | 805.853 | 27,9 | 23,9 (23,2) | 0,80 |
+| LOD 0,4° | 1.398.356 | 34,6 | 24,9 (24,2) | 0,84 |
+
+Lectura:
+- **Sin agujeros y con paralaje**: a igual o menor número de splats que la poda, +6 dB y la escena completa.
+- La calidad sigue una curva suave (~+1 dB por cada ×2 de splats); alargar las celdas en profundidad (radial ×3) cae
+  en la misma curva, no la mejora.
+- **Quest 2 (100-150 k)**: escena completa pero blanda (todo, también el suelo cercano, queda a ~2° por splat).
+  **PC VR (0,6°, ~800 k)**: casi fiel (se ablandan el retablo y los relieves finos), ~28 ms por ojo en la 3050 a
+  resolución de Quest; con el pase 3DGS a 0,7 de resolución y la Vive Pro (90 Hz) aún hay que bajar a ~1°.
+- El límite de la fusión geométrica es que nadie corrige los errores: el siguiente salto de calidad es la
+  **destilación** (§11.3-D) partiendo de este LOD como inicialización: optimizar posiciones, formas, colores y
+  opacidades de los 100-150 k splats contra renders del original desde la estación (PyTorch + gsplat con CUDA).
+
 Reproducir (desde RealSenseScans):
 ```
 python tools/splats.py info Saves/entornos/escena1/original/scene.ply
 python tools/splats.py camaras Saves/entornos/escena1/original/scene.ply
 python tools/splats.py limpiar Saves/entornos/escena1/original/scene.ply --variantes-sh 3,1,0
 python tools/splats.py estacion Saves/entornos/escena1/limpio_sh1.ply --nombre nave --vista nave --k 100,150,300,600 --sh 1
+python tools/splats.py lod Saves/entornos/escena1/limpio_sh1.ply --nombre nave --vista nave --angulos 2,1.5,0.6
 Unity.exe -batchmode -force-d3d12 -projectPath "<VR ScanWorld>" -executeMethod ScanWorld.EditorTools.GsplatBench.Run
   -benchPly "ref=<...>/limpio_sh3_p0.ply|<...>/limpio_sh3_p1.ply;e150=<...>/estacion_nave_150k.ply"
   -benchCams <...>/camaras_estacion_nave.json -benchOut <...>/bench_estacion

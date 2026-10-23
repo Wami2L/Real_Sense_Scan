@@ -97,7 +97,7 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
 - Banco de splats: `-executeMethod ScanWorld.EditorTools.GsplatBench.Run -benchPly "etiqueta=a.ply|b.ply;..."
   -benchCams camaras.json -benchOut <dir>` (sin `-quit`; un render por tick del editor porque
   `Graphics.RenderMeshPrimitives` acumula dibujos si no termina el frame).
-- Escenas 3DGS: `live3d/splats/` (PLY por bloques, análisis, limpieza, poda por estación) + `tools/splats.py`;
+- Escenas 3DGS: `live3d/splats/` (PLY por bloques, análisis, limpieza, poda por estación, LOD por fusión) + `tools/splats.py`;
   datos en `Saves/entornos/<nombre>/` (ignorado). La escena de prueba es CC BY-NC-ND: no distribuir sus variantes.
 - Paquete `Assets/ScanWorld/` (ver su `LEEME.md`): `ScanLinkClient` (consulta 5010), `RsmLoader` (RSM v1/v2 con
   textura → `RsmModel`), `ScanGallery`
@@ -128,7 +128,7 @@ python app.py --synthetic-object   # escáner de objetos sin cámaras (plato gir
 python -m live3d.unity_link        # enlace con Unity (5010); --red para otros equipos (token)
 python tools/generar_base_escaneo.py --hoja A3   # hoja imprimible de la base de escaneo
 python tools/reprocesar_objeto.py Saves/<fecha>/objeto_HHMMSS [--reemplazar <id>]  # rehacer un objeto sin cámara
-python tools/splats.py info|camaras|limpiar|estacion|comparar ...  # escenas 3DGS (plan 15 §7, §12)
+python tools/splats.py info|camaras|limpiar|estacion|lod|comparar ...  # escenas 3DGS (plan 15 §7, §12)
 python -m live3d.tools.probe_client  # cliente WS de prueba
 python -m pip install -r requirements-dev.txt
 python -m pytest                   # tests de humo (lanzan su propio servidor sintético en un puerto libre)

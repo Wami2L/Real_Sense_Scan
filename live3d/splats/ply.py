@@ -122,6 +122,23 @@ class SplatPly:
         return [f"f_rest_{c * per + k}" for c in range(3) for k in range(keep)]
 
 
+def write_columns(path, cols, comments=()):
+    """Escribe un PLY 3DGS a partir de un dict de arrays float32 (mismo orden de propiedades que el dict)."""
+    props = list(cols)
+    n = len(cols[props[0]])
+    data = np.empty(n, np.dtype([(p, "<f4") for p in props]))
+    for p in props:
+        data[p] = cols[p]
+    header = ["ply", "format binary_little_endian 1.0"] + [f"comment {c}" for c in comments]
+    header += [f"element vertex {n}"] + [f"property float {p}" for p in props] + ["end_header"]
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(("\n".join(header) + "\n").encode("ascii"))
+        f.write(data.tobytes())
+    os.replace(tmp, path)
+    return n
+
+
 def write_ply(path, src: SplatPly, mask=None, sh_degree=None, transform=None, comments=(), size=1_000_000):
     """
     Escribe un PLY nuevo a partir de `src` por bloques: filtra con `mask` (bool por splat), recorta SH a

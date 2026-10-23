@@ -8,7 +8,7 @@ import os
 import numpy as np
 import pytest
 
-from live3d.splats import SplatPly, analisis, estacion, limpieza, write_ply
+from live3d.splats import SplatPly, analisis, estacion, limpieza, lod, write_columns, write_ply
 
 
 def _write_scene(path, pos, alpha, sigma, sh_degree=3, seed=0):
@@ -119,9 +119,86 @@ def test_importancia_respeta_oclusion(scene):
     ply = SplatPly.open(path)
     core = analisis.load_core(ply)
     pts = estacion.view_points(np.array([0.0, 2.0, 0.0]), radius=0.5)   # delante de la pared
-    imp = estacion.importance(core["pos"], core["alpha"], core["sigma"], core["finite"], pts, res=(512, 256))
+    imp = estacion.importance(core["pos"], core["alpha"], core["sigma"], core["finite"], pts, res=(512, 256),
+                              normal=core["normal"])
     wall, hidden = tags == 1, tags == 2
     assert (imp[wall] > 0).mean() > 0.9                  # la pared se ve
     assert (imp[hidden] > 0).mean() < 0.05               # lo de detrás de la pared no
     keep = estacion.top_k(imp, 5000)
     assert keep.sum() == 5000 and not (keep & hidden).any()
+
+
+def test_cuaterniones_ida_y_vuelta():
+    rng = np.random.default_rng(1)
+    q = rng.normal(size=(500, 4))
+    q /= np.linalg.norm(q, axis=1, keepdims=True)
+    q[q[:, 0] < 0] *= -1
+    q2 = lod._mat_to_quat(lod._quat_to_mat(q))
+    q2[q2[:, 0] < 0] *= -1
+    assert np.allclose(q, q2, atol=1e-9)
+
+
+def _cols_from_arrays(pos, alpha, sigma, quat, dc):
+    cols = {"x": pos[:, 0], "y": pos[:, 1], "z": pos[:, 2],
+            "f_dc_0": dc[:, 0], "f_dc_1": dc[:, 1], "f_dc_2": dc[:, 2],
+            "opacity": np.log(alpha / (1 - alpha)),
+            "scale_0": np.log(sigma[:, 0]), "scale_1": np.log(sigma[:, 1]), "scale_2": np.log(sigma[:, 2]),
+            "rot_0": quat[:, 0], "rot_1": quat[:, 1], "rot_2": quat[:, 2], "rot_3": quat[:, 3]}
+    return {k: np.asarray(v, np.float32) for k, v in cols.items()}
+
+
+def test_fusion_de_una_pared_lejana():
+    """Pared densa a 20 m: se fusiona en pocas gaussianas planas, opacas, del mismo color y en su sitio."""
+    rng = np.random.default_rng(2)
+    n = 40000
+    pos = np.c_[rng.uniform(-2, 2, n), rng.uniform(-1, 1, n), np.full(n, 20.0)]
+    sigma = np.c_[np.full(n, 0.02), np.full(n, 0.02), np.full(n, 0.002)]   # planas en z (local = mundo)
+    quat = np.tile([1.0, 0, 0, 0], (n, 1))
+    dc = np.tile([0.5, -0.2, 0.1], (n, 1))
+    cols = _cols_from_arrays(pos, np.full(n, 0.8), sigma, quat, dc)
+    key, size = lod.cell_keys(pos, np.zeros(3), theta=np.radians(1.0))
+    out, st = lod.merge(cols, key, size)
+    m = len(out["x"])
+    assert m < n / 20 and st["intactos"] < 50
+    p = np.c_[out["x"], out["y"], out["z"]]
+    assert np.allclose(p[:, 2], 20.0, atol=0.02)                            # siguen en el plano de la pared
+    assert np.allclose(np.c_[out["f_dc_0"], out["f_dc_1"], out["f_dc_2"]], [0.5, -0.2, 0.1], atol=1e-5)
+    a = 1 / (1 + np.exp(-out["opacity"]))
+    assert np.median(a) > 0.9                                               # pared densa: opaca
+    s = np.sort(np.exp(np.c_[out["scale_0"], out["scale_1"], out["scale_2"]]), axis=1)
+    assert np.median(s[:, 0]) < 0.01 < np.median(s[:, 1])                    # planas: espesor << extensión
+    # El eje más corto de cada fusionada apunta hacia la cámara (normal de la pared = z).
+    R = lod._quat_to_mat(np.c_[out["rot_0"], out["rot_1"], out["rot_2"], out["rot_3"]].astype(np.float64))
+    i_min = np.argmin(np.c_[out["scale_0"], out["scale_1"], out["scale_2"]], axis=1)
+    normal = R[np.arange(m), :, i_min]
+    assert np.median(np.abs(normal[:, 2])) > 0.99
+
+
+def test_cerca_queda_intacto():
+    """Splats sueltos a 1 m: cada uno en su celda, se copian sin tocar."""
+    rng = np.random.default_rng(3)
+    n = 300
+    pos = np.c_[rng.uniform(-3, 3, n), rng.uniform(-3, 3, n), np.full(n, 1.2)]   # muy separados entre sí
+    cols = _cols_from_arrays(pos, np.full(n, 0.5), np.full((n, 3), 0.01), np.tile([1.0, 0, 0, 0], (n, 1)),
+                             rng.normal(size=(n, 3)))
+    key, size = lod.cell_keys(pos, np.zeros(3), theta=np.radians(0.5))
+    out, st = lod.merge(cols, key, size)
+    assert st["intactos"] == n and len(out["x"]) == n
+    assert sorted(out["x"].tolist()) == sorted(cols["x"].tolist())
+
+
+def test_pared_de_canto_no_se_tapa_a_si_misma():
+    """Una pared larga vista muy de canto (como las altas de la nave) con splats grandes y planos y detalle
+    pequeño encima: los discos de los grandes no deben ocultar las partes más lejanas de la misma pared."""
+    rng = np.random.default_rng(4)
+    big = 3000
+    small = 20000
+    z = np.r_[rng.uniform(1, 40, big), rng.uniform(1, 40, small)]
+    y = np.r_[rng.uniform(-6, 0, big), rng.uniform(-6, 0, small)]
+    pos = np.c_[np.full(big + small, 3.0), y, z].astype(np.float32)
+    sigma = np.r_[np.tile([0.35, 0.35, 0.01], (big, 1)), np.tile([0.03, 0.03, 0.005], (small, 1))].astype(np.float32)
+    alpha = np.full(big + small, 0.9, np.float32)
+    pts = estacion.view_points(np.array([0.0, 0.0, 0.0]), radius=0.5)
+    normal = np.tile(np.float32([1, 0, 0]), (len(pos), 1))            # la pared mira hacia x
+    imp = estacion.importance(pos, alpha, sigma, np.ones(len(pos), bool), pts, normal=normal)
+    assert (imp[big:] > 0).mean() > 0.97
