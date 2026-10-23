@@ -49,12 +49,18 @@ def load_splats(path, sh_degree, device=DEV):
     }, min(sh_degree, ply.sh_degree)
 
 
-def render(s, viewmats, K, w, h, sh_degree):
+def render(s, viewmats, K, w, h, sh_degree, with_meta=False):
     colors = torch.cat([s["sh0"], s["shN"]], 1)
-    img, _, _ = rasterization(
+    img, _, meta = rasterization(
         s["means"], F.normalize(s["quats"], dim=-1), torch.exp(s["scales"]), torch.sigmoid(s["opacities"]),
         colors, viewmats, K, w, h, sh_degree=sh_degree, packed=True)     # fondo negro por defecto
-    return img.clamp(0, 1)
+    img = img.clamp(0, 1)
+    return (img, meta) if with_meta else img
+
+
+def tile_pairs(meta):
+    """Pares splat-tesela (16×16 px) que rasteriza gsplat: indicador del overdraw (coste de fragmentos)."""
+    return int(meta["tiles_per_gauss"].sum())
 
 
 # ---------------------------------------------------------------------------------------------- cámaras
@@ -125,6 +131,9 @@ def main():
     ap.add_argument("--iters", type=int, default=4000)
     ap.add_argument("--lote", type=int, default=2, help="vistas por iteración")
     ap.add_argument("--sh", type=int, default=1)
+    ap.add_argument("--cap-escala", type=float, default=1.5,
+                    help="ningún eje de un splat puede superar este factor × su eje mayor inicial (0 = sin límite): "
+                         "acota el overdraw")
     ap.add_argument("--semilla", type=int, default=0)
     ap.add_argument("--sufijo", default="dest")
     a = ap.parse_args()
@@ -166,18 +175,25 @@ def main():
     opt = torch.optim.Adam([{"params": [params[k]], "lr": lr[k], "name": k} for k in params], eps=1e-15)
     decay = 0.01 ** (1 / a.iters)                                # medias: lr × 0,01 al final
 
+    # Límite de tamaño: cada eje <= cap × eje mayor inicial (en log: escalas <= max0 + log cap).
+    scale_cap = None
+    if a.cap_escala > 0:
+        scale_cap = (params["scales"].detach().max(dim=1, keepdim=True).values + math.log(a.cap_escala))
+
     val = list(range(a.vistas, n_all))
 
     def evaluate(s):
         with torch.no_grad():
-            ps = []
+            ps, pairs = [], []
             for i in val:
-                img = render(s, vms[i:i + 1], K1[None], w, h, sh_s)
+                img, meta = render(s, vms[i:i + 1], K1[None], w, h, sh_s, with_meta=True)
                 ps.append(psnr(img, targets[i:i + 1].to(DEV).float() / 255))
-            return float(np.mean(ps))
+                pairs.append(tile_pairs(meta))
+            return float(np.mean(ps)), float(np.mean(pairs))
 
-    p0 = evaluate(params)
-    print(f"Alumno: {n:,} splats SH{sh_s} · PSNR de validación inicial {p0:.2f} dB")
+    p0, pairs0 = evaluate(params)
+    print(f"Alumno: {n:,} splats SH{sh_s} · PSNR de validación inicial {p0:.2f} dB · "
+          f"{pairs0 / 1e6:.2f} M pares splat-tesela por vista")
     for it in range(1, a.iters + 1):
         idx = torch.randint(0, a.vistas, (a.lote,))
         gt = targets[idx].to(DEV, non_blocking=True).float() / 255
@@ -186,14 +202,18 @@ def main():
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
+        if scale_cap is not None:
+            with torch.no_grad():
+                params["scales"].copy_(torch.minimum(params["scales"], scale_cap))
         for g in opt.param_groups:
             if g["name"] == "means":
                 g["lr"] *= decay
-        if it % 500 == 0 or it == a.iters:
-            print(f"  iter {it}: pérdida {loss.item():.4f} · PSNR val {evaluate(params):.2f} dB "
-                  f"({time.time() - t0:.0f} s)")
+        if it % 1000 == 0 or it == a.iters:
+            pv, pr = evaluate(params)
+            print(f"  iter {it}: pérdida {loss.item():.4f} · PSNR val {pv:.2f} dB · "
+                  f"pares ×{pr / pairs0:.2f} ({time.time() - t0:.0f} s)")
 
-    p1 = evaluate(params)
+    p1, pairs1 = evaluate(params)
     # Escribir en el mismo marco y formato (f_rest por canal, como el original).
     s = {k: v.detach().float().cpu().numpy() for k, v in params.items()}
     q = s["quats"] / np.linalg.norm(s["quats"], axis=1, keepdims=True)
@@ -215,10 +235,12 @@ def main():
                             f"{a.vistas} vistas {w}x{h}"])
     man_out = dict(man, salida=out, partes=[out], destilacion={
         "maestro": a.maestro, "alumno": a.alumno, "vistas": a.vistas, "validacion": a.validacion, "res": a.res,
-        "iters": a.iters, "psnr_val_inicial": p0, "psnr_val_final": p1, "segundos": round(time.time() - t0)})
+        "iters": a.iters, "cap_escala": a.cap_escala, "psnr_val_inicial": p0, "psnr_val_final": p1,
+        "pares_tesela_inicial": pairs0, "pares_tesela_final": pairs1, "segundos": round(time.time() - t0)})
     with open(out[:-4] + ".json", "w", encoding="utf-8") as f:
         json.dump(man_out, f, indent=2, ensure_ascii=False)
-    print(f"PSNR de validación {p0:.2f} → {p1:.2f} dB · {out} ({time.time() - t0:.0f} s)")
+    print(f"PSNR de validación {p0:.2f} → {p1:.2f} dB · pares splat-tesela ×{pairs1 / pairs0:.2f} · {out} "
+          f"({time.time() - t0:.0f} s)")
     return 0
 
 

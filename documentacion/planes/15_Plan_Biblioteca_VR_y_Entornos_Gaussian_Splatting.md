@@ -531,7 +531,33 @@ Lectura:
 Siguientes mejoras: (1) entrenar a más resolución (768-1024) o con recortes de 1440; (2) limitar el tamaño en pantalla
 de los splats durante el entrenamiento (regularizador de escala) para que no crezca el overdraw; (3) entrenar en
 espacio lineal para quitar `Gamma To Linear` en Unity (§5.2); (4) varias estaciones y transición entre ellas;
-(5) **medir en el Quest 2** (APK con la estación destilada).
+(5) **medir en el Quest 2** (APK con la estación destilada). (1) y (2) hechas en §12.7.
+
+### 12.7 Destilación afinada: más resolución y límite de tamaño
+`--res 1024` (el maestro de 9,8 M cabe: 2,1 GB de pico) y `--cap-escala k`: tras cada paso, ningún eje de un splat
+puede pasar de k × su eje mayor inicial (restricción dura: el overdraw queda acotado por construcción). Indicador
+rápido en Python: pares splat-tesela 16×16 que rasteriza gsplat (`tiles_per_gauss`). LOD 2° (99.681 splats):
+
+| Variante | Entrenamiento | pares ×inicial | ms (Unity, 3050) | PSNR / SSIM (Unity) |
+|---|---|---|---|---|
+| LOD sin destilar | — | 1,00 | 6,7 | 20,8 / 0,720 |
+| 512 px, sin límite (§12.6) | 2,5 min | — | 9,4 | 24,2 / 0,801 |
+| 512 px, límite ×1,5 | 2,7 min | 1,07 | 6,1 | 23,7 / 0,795 |
+| **1024 px, sin límite** | 7,8 min | 1,32 | 6,9 | **24,6 / 0,828** |
+| **1024 px, límite ×1,5** | 6,8 min | 1,09 | **5,6** | 24,0 / 0,817 |
+| 1024 px, límite ×1,2 | 6,6 min | 1,00 | 5,2 | 23,8 / 0,813 |
+| LOD 0,6° sin destilar (806 k) | — | — | 27,9 | 23,9 / 0,795 |
+
+Lectura:
+- **Entrenar a 1024 px mejora la calidad a la resolución del visor** (SSIM 0,801 → 0,828) y, de paso, frena el
+  crecimiento de los splats (a 512 px se agrandaban porque a esa resolución un splat grande y borroso cuesta poco).
+- **El límite de tamaño deja el coste por debajo del LOD sin destilar** (5,2-5,6 ms frente a 6,7) perdiendo
+  0,6-0,8 dB: los splats no crecen y la calidad se gana moviendo y recoloreando, no engordando.
+- **Recomendado para Quest 2: 1024 px + límite ×1,5** (`lod_nave_2_d1024_c1p5.ply`, 100 k splats): +3,2 dB y
+  −16 % de coste frente al LOD sin destilar; mejor SSIM que 806 k sin destilar con 1/5 del coste.
+  Para PC VR (o si el Quest aguanta): 1024 px sin límite.
+- Lo que sigue blando es el detalle lejano y fino (retablo, cuadros): con 100 k splats para toda la esfera no hay
+  presupuesto para él; la mejora natural es repartir más splats hacia donde mira la gente (altar) o usar 150 k.
 
 Reproducir (desde RealSenseScans):
 ```
@@ -540,7 +566,7 @@ python -m uv venv .venv-splats --python 3.10
 python -m uv pip install --python .venv-splats/Scripts/python.exe "torch==2.4.1" --index-url https://download.pytorch.org/whl/cu124
 python -m uv pip install --python .venv-splats/Scripts/python.exe "numpy<2" pillow scipy packaging setuptools
 python -m uv pip install --python .venv-splats/Scripts/python.exe "gsplat==1.5.3+pt24cu124" --find-links https://docs.gsplat.studio/whl/gsplat/
-.venv-splats/Scripts/python.exe tools/destilar.py Saves/entornos/escena1/lod_nave_2.ply --maestro Saves/entornos/escena1/limpio_sh1.ply
+.venv-splats/Scripts/python.exe tools/destilar.py Saves/entornos/escena1/lod_nave_2.ply --maestro Saves/entornos/escena1/limpio_sh1.ply --res 1024 --cap-escala 1.5 --sufijo d1024_c1p5
 python tools/splats.py info Saves/entornos/escena1/original/scene.ply
 python tools/splats.py camaras Saves/entornos/escena1/original/scene.ply
 python tools/splats.py limpiar Saves/entornos/escena1/original/scene.ply --variantes-sh 3,1,0
