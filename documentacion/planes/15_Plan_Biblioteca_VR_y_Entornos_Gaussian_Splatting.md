@@ -504,8 +504,43 @@ Lectura:
   **destilación** (§11.3-D) partiendo de este LOD como inicialización: optimizar posiciones, formas, colores y
   opacidades de los 100-150 k splats contra renders del original desde la estación (PyTorch + gsplat con CUDA).
 
+### 12.6 Destilación desde el LOD (implementado, `tools/destilar.py`)
+Entorno aparte `.venv-splats` (Python 3.10 portátil con `uv`, PyTorch 2.4.1 + CUDA 12.4 y la rueda precompilada
+`gsplat 1.5.3+pt24cu124`: en Windows no hay ruedas de gsplat para Python 3.12 y sin MSVC no se puede compilar).
+El maestro (escena limpia SH1, 9,8 M) renderiza 424 vistas de 512×512 desde dentro de la estación (FOV 90°,
+alturas 1,2-1,9 m, 65 % horizonte, 25 % bóveda, 10 % suelo) y se libera la GPU; el alumno (el LOD) se optimiza
+4000 iteraciones con L1 + 0,2·(1 − SSIM), sin cambiar el número de splats. ~2,5-3 min por estación en la 3050.
+
+| Variante | Splats | ms (3050, 1 ojo) | PSNR Python (512², validación) | PSNR / SSIM en Unity (1440×1584) |
+|---|---|---|---|---|
+| LOD 2,5° → destilado | 62.720 | 3,7 → 10,1 | 20,4 → 28,8 | 20,3 / 0,71 → **23,7 / 0,79** |
+| LOD 2° → destilado | 99.681 | 6,7 → 9,4 | 21,3 → 30,0 | 20,8 / 0,72 → **24,2 / 0,80** |
+| LOD 1,5° → destilado | 175.636 | 11,0 → 13,8 | 22,4 → 31,5 | 21,5 / 0,73 → **24,8 / 0,82** |
+| LOD 0,6° (sin destilar) | 805.853 | 27,9 | — | 23,9 / 0,80 |
+| LOD 0,4° (sin destilar) | 1.398.356 | 34,6 | — | 24,9 / 0,84 |
+
+Lectura:
+- **100 k splats destilados igualan a 806 k sin destilar** (8× menos), y 176 k igualan a 1,4 M. A la vista: suelo,
+  bancos, pilares y nervios de la bóveda nítidos; se ablanda el detalle fino lejano (retablo, cuadros).
+- **Para Quest 2: LOD 2° destilado (100 k)** es el candidato; falta medirlo en el visor.
+- La distancia entre el PSNR de Python (30 dB) y el de Unity (24 dB) viene de entrenar a 512² y medir a 1440×1584,
+  y de las diferencias entre los dos renderizadores (gsplat de nerfstudio frente a gsplat de wuyize con
+  `Gamma To Linear`).
+- La destilación **agranda los splats** (más overdraw: 2° pasa de 6,7 a 9,4 ms; 2,5° llega a 24 ms en una vista).
+
+Siguientes mejoras: (1) entrenar a más resolución (768-1024) o con recortes de 1440; (2) limitar el tamaño en pantalla
+de los splats durante el entrenamiento (regularizador de escala) para que no crezca el overdraw; (3) entrenar en
+espacio lineal para quitar `Gamma To Linear` en Unity (§5.2); (4) varias estaciones y transición entre ellas;
+(5) **medir en el Quest 2** (APK con la estación destilada).
+
 Reproducir (desde RealSenseScans):
 ```
+python -m pip install --user uv
+python -m uv venv .venv-splats --python 3.10
+python -m uv pip install --python .venv-splats/Scripts/python.exe "torch==2.4.1" --index-url https://download.pytorch.org/whl/cu124
+python -m uv pip install --python .venv-splats/Scripts/python.exe "numpy<2" pillow scipy packaging setuptools
+python -m uv pip install --python .venv-splats/Scripts/python.exe "gsplat==1.5.3+pt24cu124" --find-links https://docs.gsplat.studio/whl/gsplat/
+.venv-splats/Scripts/python.exe tools/destilar.py Saves/entornos/escena1/lod_nave_2.ply --maestro Saves/entornos/escena1/limpio_sh1.ply
 python tools/splats.py info Saves/entornos/escena1/original/scene.ply
 python tools/splats.py camaras Saves/entornos/escena1/original/scene.ply
 python tools/splats.py limpiar Saves/entornos/escena1/original/scene.ply --variantes-sh 3,1,0

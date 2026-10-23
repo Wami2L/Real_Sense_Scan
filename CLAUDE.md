@@ -99,6 +99,8 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
   `Graphics.RenderMeshPrimitives` acumula dibujos si no termina el frame).
 - Escenas 3DGS: `live3d/splats/` (PLY por bloques, análisis, limpieza, poda por estación, LOD por fusión) + `tools/splats.py`;
   datos en `Saves/entornos/<nombre>/` (ignorado). La escena de prueba es CC BY-NC-ND: no distribuir sus variantes.
+- `.venv-splats/` (ignorado): Python 3.10 + torch 2.4.1 cu124 + gsplat 1.5.3 precompilado, solo para `tools/destilar.py`
+  (en Windows no hay ruedas de gsplat para 3.12 y no hay MSVC para compilarlo). Instalación en el plan 15 §12.6.
 - Paquete `Assets/ScanWorld/` (ver su `LEEME.md`): `ScanLinkClient` (consulta 5010), `RsmLoader` (RSM v1/v2 con
   textura → `RsmModel`), `ScanGallery`
   (pedestales), `ScanBuildEffect` + shaders URP `ScanWorld/BuildParticles` y `ScanWorld/BuildSolid` (sin VFX Graph ni
@@ -129,6 +131,7 @@ python -m live3d.unity_link        # enlace con Unity (5010); --red para otros e
 python tools/generar_base_escaneo.py --hoja A3   # hoja imprimible de la base de escaneo
 python tools/reprocesar_objeto.py Saves/<fecha>/objeto_HHMMSS [--reemplazar <id>]  # rehacer un objeto sin cámara
 python tools/splats.py info|camaras|limpiar|estacion|lod|comparar ...  # escenas 3DGS (plan 15 §7, §12)
+.venv-splats\Scripts\python tools/destilar.py <lod.ply> --maestro <limpio.ply>  # destilación (PyTorch+gsplat, plan 15 §12.6)
 python -m live3d.tools.probe_client  # cliente WS de prueba
 python -m pip install -r requirements-dev.txt
 python -m pytest                   # tests de humo (lanzan su propio servidor sintético en un puerto libre)

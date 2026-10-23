@@ -24,6 +24,7 @@ MANIFEST
 
 # Entornos Virtuales
 .venv/
+.venv-splats/
 venv/
 env/
 ENV/
