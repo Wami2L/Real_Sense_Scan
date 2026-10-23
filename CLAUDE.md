@@ -82,7 +82,23 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
 
 ## Proyecto Unity asociado
 - `C:\Users\Usuario\Documents\Proyectos Unity\VR ScanWorld` — Unity **6000.3.8f1**, URP 17.3, solo Input System nuevo,
-  espacio lineal. Git propio: https://github.com/Wami2L/Unity_Realsense_Reciever (rama `main`). Sin OpenXR/Meta todavía.
+  espacio lineal. Git propio: https://github.com/Wami2L/Unity_Realsense_Reciever (rama `main`; G0 del plan 15 en la
+  rama `gsplat`). XRI 3.6.1 + OpenXR 1.16.1 (+ Oculus 4.5.5 instalado pero sin loader).
+- VR (G0, plan 15): **OpenXR en las dos plataformas**. Windows = D3D12 (+Vulkan), SPI, perfiles Vive/Oculus Touch/Index
+  (Vive Pro por SteamVR, Quest 2 por Link). Android = solo Vulkan, multiview, Meta Quest Support + foveación SRP,
+  IL2CPP ARM64, minSdk 32, id `com.wami2l.vrscanworld`. Build profiles `Assets/Settings/BuildProfiles/{Quest2,PCVR}.asset`
+  (defines `SCANWORLD_QUEST2` / `SCANWORLD_PCVR`). Todo lo aplica `ScanWorldXRSetup.Configure` (idempotente; menú
+  ScanWorld › Configurar VR o `-executeMethod ScanWorld.EditorTools.ScanWorldXRSetup.BatchConfigure`); APK con
+  `...BatchBuildQuest2` (→ `Builds/Quest2/`), PC con `...BatchBuildPcVr`. El editor en batch arranca en Vulkan aunque
+  D3D12 sea el primero de la lista: para probar D3D12 usar `-force-d3d12`.
+- **gsplat** (wuyize, v1.4.0, commit `a2bf458`) vendorizado en `Packages/wu.yize.gsplat/`, con `Gsplat URP Feature`
+  en `PC_Renderer` y `Mobile_Renderer`. Cambios propios en commits aparte con prefijo `gsplat:`. **No lee PLY de más
+  de 2 GB**: partir (`tools/splats.py limpiar` lo hace solo) y usar la ordenación global.
+- Banco de splats: `-executeMethod ScanWorld.EditorTools.GsplatBench.Run -benchPly "etiqueta=a.ply|b.ply;..."
+  -benchCams camaras.json -benchOut <dir>` (sin `-quit`; un render por tick del editor porque
+  `Graphics.RenderMeshPrimitives` acumula dibujos si no termina el frame).
+- Escenas 3DGS: `live3d/splats/` (PLY por bloques, análisis, limpieza, poda por estación) + `tools/splats.py`;
+  datos en `Saves/entornos/<nombre>/` (ignorado). La escena de prueba es CC BY-NC-ND: no distribuir sus variantes.
 - Paquete `Assets/ScanWorld/` (ver su `LEEME.md`): `ScanLinkClient` (consulta 5010), `RsmLoader` (RSM v1/v2 con
   textura → `RsmModel`), `ScanGallery`
   (pedestales), `ScanBuildEffect` + shaders URP `ScanWorld/BuildParticles` y `ScanWorld/BuildSolid` (sin VFX Graph ni
@@ -112,6 +128,7 @@ python app.py --synthetic-object   # escáner de objetos sin cámaras (plato gir
 python -m live3d.unity_link        # enlace con Unity (5010); --red para otros equipos (token)
 python tools/generar_base_escaneo.py --hoja A3   # hoja imprimible de la base de escaneo
 python tools/reprocesar_objeto.py Saves/<fecha>/objeto_HHMMSS [--reemplazar <id>]  # rehacer un objeto sin cámara
+python tools/splats.py info|camaras|limpiar|estacion|comparar ...  # escenas 3DGS (plan 15 §7, §12)
 python -m live3d.tools.probe_client  # cliente WS de prueba
 python -m pip install -r requirements-dev.txt
 python -m pytest                   # tests de humo (lanzan su propio servidor sintético en un puerto libre)
@@ -128,4 +145,6 @@ servidor con el estudio como interfaz principal (fases U0–U5).
 `documentacion/planes/12_Plan_Alineacion_Guiada_Marcadores_y_Puntos.md` — alineación guiada (implementada; §6 = qué refinar).
 `documentacion/planes/13_Plan_Escaner_de_Objetos_a_Unity.md` — **prioridad**: escáner de objetos → Blender → Unity.
 `documentacion/planes/14_Plan_Escaneo_Texturizado_RealSense.md` — geometría RealSense + textura fotográfica (vigente).
+`documentacion/planes/15_Plan_Biblioteca_VR_y_Entornos_Gaussian_Splatting.md` — **fin del proyecto** (biblioteca infinita en
+VR dentro de entornos 3DGS) y plan G0–G6 para 3DGS en Unity; base elegida: gsplat (wuyize) vendorizado.
 Guía de uso: `documentacion/GUIA_ESCANER_OBJETOS.md`.

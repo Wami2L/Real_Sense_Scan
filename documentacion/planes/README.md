@@ -21,6 +21,8 @@ En esta carpeta se recopilan las propuestas arquitectónicas, planes técnicos, 
 | **11** | Ecosistema Unificado: Estudio y Live 3D en un Solo Servidor | **Propuesta** | [MD](11_Plan_Ecosistema_Unificado_Estudio_Live3D.md) |
 | **12** | Alineación Guiada: Marcadores, Puntos a Mano e Interfaz Explicativa | **Implementado · en refinamiento** | [MD](12_Plan_Alineacion_Guiada_Marcadores_y_Puntos.md) |
 | **13** | Escáner de Objetos → Blender → Unity (VR ScanWorld) | **Implementado · a probar con hardware** | [MD](13_Plan_Escaner_de_Objetos_a_Unity.md) · [Guía](../GUIA_ESCANER_OBJETOS.md) |
+| **14** | Escaneo Texturizado: Geometría RealSense + Textura Fotográfica | **Implementado · probado con la D455** | [MD](14_Plan_Escaneo_Texturizado_RealSense.md) |
+| **15** | Biblioteca Infinita en VR y Entornos Gaussian Splatting en Unity | **Bases + investigación · fases G0–G6** | [MD](15_Plan_Biblioteca_VR_y_Entornos_Gaussian_Splatting.md) |
 
 ---
 
@@ -98,3 +100,9 @@ En esta carpeta se recopilan las propuestas arquitectónicas, planes técnicos, 
 * Por qué el primer escaneo real salió sin forma (objeto girado sobre la hoja quieta, pose inestable lejos, vóxel grueso, Min-Z mal puesto).
 * RealSense para la forma + textura UV con las fotos (una vista por isla del atlas); RealityScan, COLMAP y color map optimization evaluados.
 * Pose por plano de profundidad + Umeyama, ráfaga de 6 cuadros, captura automática, RSM v2 con textura y Unity texturizado.
+
+### 15. [15_Plan_Biblioteca_VR_y_Entornos_Gaussian_Splatting.md](15_Plan_Biblioteca_VR_y_Entornos_Gaussian_Splatting.md)
+* Fin del proyecto: biblioteca infinita de objetos escaneados en VR, ambientada en lugares reales en Gaussian Splatting.
+* Qué hace pesada una escena 3DGS (overdraw, nº de splats, ordenación, SH, VR ×9 píxeles) y por qué PlayCanvas va rápido.
+* Compatibilidad de aras-p, dylanebert y gsplat (wuyize) con VR; base elegida, color lineal, presupuestos y fases G0–G6.
+* Quest 2 autónomo (objetivo principal): estaciones de 3 capas (splats cercanos podados/destilados, malla horneada, cubemap); PC VR con Vive Pro.
