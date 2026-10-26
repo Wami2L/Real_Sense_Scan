@@ -104,6 +104,16 @@ def _push_pull(img, known):
     return filled
 
 
+def _blend(Wn, S, gains):
+    """Media ponderada de las vistas con su ganancia, vista a vista (sin el array float V×M×3)."""
+    acc = np.zeros(S.shape[1:], np.float32)
+    for k in range(len(S)):
+        w = Wn[k]
+        nz = w > 0
+        acc[nz] += w[nz, None] * (S[k][nz].astype(np.float32) * gains[k])
+    return acc / np.maximum(Wn.sum(0), 1e-12)[:, None]
+
+
 def bake(mesh, views, size=2048, max_triangles=80000, edge_ramp_px=10.0, log=None):
     """Malla (legacy, marco de las poses) + vistas -> (malla con UV por triángulo, textura RGB uint8, info).
 
@@ -113,10 +123,13 @@ def bake(mesh, views, size=2048, max_triangles=80000, edge_ramp_px=10.0, log=Non
     log = log or (lambda *_: None)
     m = _prepare(mesh, max_triangles)
     tm = o3d.t.geometry.TriangleMesh.from_legacy(m)
-    try:   # una partición: islas grandes (una vista por isla queda más limpia)
-        stretch, charts, _ = tm.compute_uvatlas(size=size, gutter=4.0, max_stretch=0.2, parallel_partitions=1)
-    except RuntimeError as ex:  # UVAtlas puede fallar con algún vértice no manifold: por trozos sí sale
-        log(f"atlas UV de una pieza falló ({ex}); reintento por particiones")
+    # 4 particiones: con una sola, UVAtlas se dispara en mallas con muchos trozos (trípode con 3 500 islas:
+    # 8 part. 16 s, 4 part. 24 s, 2 part. 92 s, 1 part. > 13 min con el servidor bloqueado). En objetos
+    # sencillos una pieza daba algo menos de islas (caja: 330 frente a 397), no compensa el riesgo.
+    try:
+        stretch, charts, _ = tm.compute_uvatlas(size=size, gutter=4.0, max_stretch=0.2, parallel_partitions=4)
+    except RuntimeError as ex:  # UVAtlas puede fallar con algún vértice no manifold: con más trozos sí sale
+        log(f"atlas UV falló ({ex}); reintento con 8 particiones")
         tm = o3d.t.geometry.TriangleMesh.from_legacy(m)
         stretch, charts, _ = tm.compute_uvatlas(size=size, gutter=4.0, max_stretch=0.2, parallel_partitions=8)
     log(f"atlas UV: {charts} islas, estiramiento {stretch:.3f}")
@@ -162,11 +175,11 @@ def bake(mesh, views, size=2048, max_triangles=80000, edge_ramp_px=10.0, log=Non
         wgt, u, vv = weigh(v, X, Nn, zbuf, edge_map, w, h)
         col = _sample(v.color.astype(np.float32), u, vv)
         wgt *= np.where(col.max(1) > 250, 0.15, 1.0)            # brillo especular: casi no cuenta
-        samples.append(col)
+        samples.append(np.clip(np.round(col), 0, 255).astype(np.uint8))   # 1 byte por canal: 36 vistas HD caben
         weights.append(wgt.astype(np.float32))
         log(f"vista {k + 1}/{len(views)}: {int((wgt > 0).sum())} texels")
 
-    S = np.stack(samples)                         # (V, M, 3)
+    S = np.stack(samples)                         # (V, M, 3) uint8
     W = np.stack(weights)                         # (V, M)
     best = W.max(0, keepdims=True)
     # UNA vista por isla del atlas: la que mejor ve la isla en conjunto. Mezclar vistas con la
@@ -181,14 +194,14 @@ def bake(mesh, views, size=2048, max_triangles=80000, edge_ramp_px=10.0, log=Non
 
     gains = np.ones((len(views), 3), np.float32)
     for _ in range(2):                            # compensación de exposición por vista
-        blend = np.einsum("vm,vmc->mc", Wn, S * gains[:, None, :]) / np.maximum(Wn.sum(0), 1e-12)[:, None]
+        blend = _blend(Wn, S, gains)
         for k in range(len(views)):
             sel = W[k] > 0.3 * best[0]
             if sel.sum() < 500:
                 continue
-            ratio = np.median(blend[sel] + 1, axis=0) / np.median(S[k][sel] + 1, axis=0)
+            ratio = np.median(blend[sel] + 1, axis=0) / np.median(S[k][sel].astype(np.float32) + 1, axis=0)
             gains[k] = np.clip(ratio, 0.6, 1.6)
-    blend = np.einsum("vm,vmc->mc", Wn, S * gains[:, None, :]) / np.maximum(Wn.sum(0), 1e-12)[:, None]
+    blend = _blend(Wn, S, gains)
     seen = Wn.sum(0) > 0
     used = np.unique(label[label >= 0])
     log(f"vistas usadas en la textura: {len(used)}/{len(views)}")
