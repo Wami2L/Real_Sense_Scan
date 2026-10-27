@@ -22,10 +22,22 @@ from live3d.splats import SplatPly  # noqa: E402
 from live3d.splats import analisis, vista  # noqa: E402
 
 
-def entorno_dir(ply_path):
-    """Saves/entornos/<nombre>/original/x.ply -> Saves/entornos/<nombre>/ (si no, la carpeta del archivo)."""
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def entorno_dir(ply_path, nombre=None):
+    """
+    Saves/entornos/<nombre>/original/x.ply -> Saves/entornos/<nombre>/. Un PLY de fuera (p. ej. el de otro programa)
+    con `nombre` -> Saves/entornos/<nombre>/: los resultados no se escriben junto al original. Sin nombre, su carpeta.
+    """
     d = os.path.dirname(os.path.abspath(ply_path))
-    return os.path.dirname(d) if os.path.basename(d) == "original" else d
+    if os.path.basename(d) == "original":
+        return os.path.dirname(d)
+    if nombre:
+        out = os.path.join(REPO, "Saves", "entornos", nombre)
+        os.makedirs(out, exist_ok=True)
+        return out
+    return d
 
 
 def cmd_info(a):
@@ -283,12 +295,13 @@ def cmd_preparar(a):
     """
     Cadena completa para una escena nueva (plan 15 §13): análisis + vistas previas, limpieza (SH1, trasladada, sin
     partir), pirámide LOD para PC y para Quest 2 y, con --unity, exportación al proyecto VR ScanWorld
-    (Assets/ScanWorld/Entornos/<nombre>/, PLY con .meta en RDF). En Unity: ScanWorld › Crear escenas de entornos.
+    (Assets/ScanWorld/Entornos/<nombre>/, PLY con .meta en RDF). Desde Unity: ScanWorld › Importar escena 3DGS (lanza
+    este comando y crea las escenas).
     """
     from live3d.splats import limpieza, piramide
     t0 = time.time()
     ply = SplatPly.open(a.ply)
-    base = entorno_dir(a.ply)
+    base = entorno_dir(a.ply, a.nombre)
     print(f"[1/4] Análisis: {ply.count:,} splats · SH{ply.sh_degree} · "
           f"{ply.count * ply.bytes_per_splat / 2**30:.2f} GB")
     core = analisis.load_core(ply)
@@ -360,9 +373,9 @@ def cmd_preparar(a):
         outputs.append(path)
         print(f"  {name}: {pm['splats_total']:,} splats, {os.path.getsize(path) / 2**20:.0f} MB")
 
-    # Colisiones para la escena VR (plan 15 G5): mismo marco que las pirámides (metros, suelo en y = 0).
+    # Colisiones para la escena VR (plan 15 G5): metros, con la rotación de nivelación ya aplicada (suelo en y = 0).
     from live3d.splats import colision
-    cman, occ, corigin = colision.build(clean, colision.Opciones())
+    cman, occ, corigin = colision.build(clean, colision.Opciones(), rotacion=man["rotacion_unity"])
     col_path = os.path.join(base, "colision.json")
     with open(col_path, "w", encoding="utf-8") as f:
         json.dump(cman, f, ensure_ascii=False)
@@ -476,7 +489,12 @@ def cmd_colision(a):
     t0 = time.time()
     ply = SplatPly.open(a.ply)
     o = colision.Opciones(voxel=a.voxel, min_alfa=a.alfa, min_splats=a.min_splats)
-    man, occ, origin = colision.build(ply, o)
+    # La rotación de nivelación del manifiesto de la limpieza (limpio_sh1.json junto al PLY), si la hay.
+    rot = None
+    if os.path.exists(a.ply[:-4] + ".json"):
+        with open(a.ply[:-4] + ".json", encoding="utf-8") as f:
+            rot = json.load(f).get("rotacion_unity")
+    man, occ, origin = colision.build(ply, o, rotacion=rot)
     base = entorno_dir(a.ply)
     out = os.path.join(base, "colision.json")
     with open(out, "w", encoding="utf-8") as f:

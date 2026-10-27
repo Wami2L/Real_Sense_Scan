@@ -105,6 +105,9 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
   `Graphics.RenderMeshPrimitives` acumula dibujos si no termina el frame).
 - Escenas 3DGS: `live3d/splats/` (PLY por bloques, análisis, limpieza, poda por estación, LOD por fusión) + `tools/splats.py`;
   datos en `Saves/entornos/<nombre>/` (ignorado). La escena de prueba es CC BY-NC-ND: no distribuir sus variantes.
+  En Unity, **ScanWorld › Importar escena 3DGS** (`Editor/ImportarEscena3DGS.cs`) lanza `preparar` como proceso (la
+  lógica sigue aquí; nada de lógica de splats en C#) y crea `Entorno_<nombre>.unity` y `_VR.unity` con `Entornos.cs` /
+  `EntornoVR.cs`, genéricos para cualquier entorno: no añadir herramientas de editor para una escena concreta.
 - `.venv-splats/` (ignorado): Python 3.10 + torch 2.4.1 cu124 + gsplat 1.5.3 precompilado, solo para `tools/destilar.py`
   (en Windows no hay ruedas de gsplat para 3.12 y no hay MSVC para compilarlo). Instalación en el plan 15 §12.6.
 - Paquete `Assets/ScanWorld/` (ver su `LEEME.md`): `ScanLinkClient` (consulta 5010), `RsmLoader` (RSM v1/v2 con

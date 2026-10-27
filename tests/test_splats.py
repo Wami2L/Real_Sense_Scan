@@ -272,3 +272,32 @@ def test_filtro_de_agujas():
     extra = {"inside": np.ones(n, bool), "neigh": np.full(n, 100)}
     m = limpieza.masks(core, rep, extra, limpieza.Opciones(agujas_ratio=10), escala=1.0)
     assert m["aguja"].tolist() == [True, False, False, False]
+
+
+def test_colisiones_niveladas(tmp_path):
+    """Escena con el suelo inclinado 10° en el archivo (COLMAP sin gravedad): con la rotación de nivelación las cajas
+    salen en el marco del mundo y el suelo es una losa plana; sin ella, la rampa aparece como obstáculos."""
+    from live3d.splats import colision
+    rng = np.random.default_rng(7)
+    n = 60000
+    mundo = np.c_[rng.uniform(-5, 5, n), np.zeros(n), rng.uniform(-5, 5, n)]
+    a = np.radians(10) / 2
+    q = [np.sin(a), 0.0, 0.0, np.cos(a)]                 # local (pirámides) -> mundo, como rotacion_unity
+    local = colision.rotar([-q[0], 0.0, 0.0, q[3]], mundo)
+    pos = (local * [1, -1, 1]).astype(np.float32)        # Unity -> RDF del archivo
+    path = _write_scene(str(tmp_path / "rampa.ply"), pos, np.full(n, 0.9, np.float32),
+                        np.full((n, 3), 0.03, np.float32), sh_degree=0)
+    ply = SplatPly.open(path)
+    log = lambda *_: None                                # noqa: E731
+
+    def obstaculos(man):
+        c = np.array(man["cajas"]).reshape(-1, 6)
+        return int((c[:, 1] - c[:, 4] / 2 > 0.1).sum())
+
+    man, _, _ = colision.build(ply, colision.Opciones(), log, rotacion=q)
+    assert man["nivelado"] and np.allclose(man["rotacion_aplicada"], q)
+    assert obstaculos(man) == 0
+    sin, _, _ = colision.build(ply, colision.Opciones(), log)
+    assert not sin["nivelado"] and obstaculos(sin) > 10
+    # Rotación identidad = sin nivelar (mismo marco que las pirámides).
+    assert not colision.build(ply, colision.Opciones(), log, rotacion=[0, 0, 0, 1])[0]["nivelado"]

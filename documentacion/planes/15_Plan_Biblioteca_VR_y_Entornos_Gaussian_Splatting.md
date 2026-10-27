@@ -629,8 +629,32 @@ Comando completo (8 s para 1 M de splats) y escena en Unity:
 ```
 python tools/splats.py preparar "<...>/resultados/<escena>.ply" --nombre <escena> --colmap "<...>/proyectos/<escena>/colmap/sparse/0" --unity "<VR ScanWorld>"
 ```
-Unity › ScanWorld › Crear escenas de entornos exportados → `Scenes/Entorno_<escena>.unity` (1 = LOD PC 600 k,
-2 = perfil Quest 150 k; cámara de vuelo). `preparar` deja también `colision.json` para una escena VR con el rig.
+En Unity crea `Scenes/Entorno_<escena>.unity` (1 = LOD PC 600 k, 2 = perfil Quest 150 k; cámara de vuelo) y, con el
+`colision.json` que deja `preparar`, `Scenes/Entorno_<escena>_VR.unity` (rig XRI, colisiones, mesa y agarrables).
+
+### 14.1 Ventana de Unity: ScanWorld › Importar escena 3DGS
+
+La misma cadena desde la interfaz de Unity, sin duplicar lógica: la ventana (`Editor/ImportarEscena3DGS.cs`) lanza
+`preparar` como proceso aparte con el Python de RealSenseScans (`.venv` o el del PATH; rutas en EditorPrefs) y muestra
+el paso (`[n/4]`), el registro y un botón de cancelar. Deduce el nombre y la carpeta COLMAP del PLY
+(`<flujo>/resultados/<escena>__x.ply` ↔ `<flujo>/proyectos/<escena>/colmap/sparse/0`).
+
+- `preparar --unity` apunta a `Temp/ScanWorldImport/` del proyecto (Unity no lo vigila): no se importan PLY a medio
+  copiar y cancelar no toca Assets. Al terminar, la ventana mueve los archivos a `Assets/ScanWorld/Entornos/<nombre>/`
+  (mismo disco: instantáneo) conservando los `.meta` que ya hubiera, así las escenas siguen apuntando a los splats.
+- El estado (PID, paso, registro en un archivo) vive en `SessionState`: sobrevive a cerrar la ventana y a las
+  recargas de dominio.
+- Las escenas que ya existen solo se recrean si se acepta (se perdería lo añadido a mano).
+- `preparar` con un PLY de fuera de `Saves/entornos/<x>/original/` escribe sus intermedios en
+  `Saves/entornos/<nombre>/`, nunca junto al original (antes los dejaba en la carpeta del PLY).
+- Las colisiones salen **niveladas** (`colision.build(..., rotacion=rotacion_unity)`, `"nivelado": true`): en una
+  escena de COLMAP el suelo del archivo puede estar inclinado y las cajas alineadas con los ejes deben estarlo con la
+  gravedad. Unity las pone en el mundo; las antiguas (sin `nivelado`) van bajo la raíz rotada.
+
+Se quitaron las herramientas de editor propias de la iglesia (`EntornoSetup`, `IglesiaVRSetup`) y el menú de
+entornos exportados: `Entornos.cs` (escena de escritorio) y `EntornoVR.cs` (escena VR) sirven para cualquier entorno,
+la iglesia incluida (`Entorno_Iglesia.unity`). Verificación sin editor: `Entornos.BatchCrearYCapturar` y
+`EntornoVR.BatchCrearYCapturar` (`-entorno <nombre>` para uno solo).
 
 ---
 

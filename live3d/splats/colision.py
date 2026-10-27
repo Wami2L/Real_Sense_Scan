@@ -4,7 +4,9 @@ con los splats opacos y pequeños (los que dibujan superficies), se limpian los 
 ocupación se agrupa en cajas (fusión voraz x → z → y). Unity crea un BoxCollider por caja (ScanWorld › Escena VR).
 
 Las cajas salen ya en ejes de Unity ((x, y, z) del archivo RDF -> (x, -y, z)) y en el marco del PLY limpio
-(trasladado: el suelo queda en y = 0), el mismo en que se importan las pirámides.
+(trasladado: el suelo queda en y = 0), el mismo en que se importan las pirámides. Con `rotacion` (la rotacion_unity
+de la limpieza, que Unity aplica a la raíz del entorno) salen ya niveladas, en el marco del mundo: en una escena de
+COLMAP el suelo del archivo puede estar inclinado y las cajas alineadas con los ejes deben estarlo con la gravedad.
 """
 
 from dataclasses import dataclass
@@ -24,11 +26,19 @@ class Opciones:
     banda_suelo: tuple = (-0.3, 0.25)   # m: alturas que cuentan como suelo para taparle los huecos
 
 
-def ocupacion(ply: SplatPly, o: Opciones, log=print):
+def rotar(q, v):
+    """Rota los vectores v (N×3) con el cuaternión q = (x, y, z, w) de Unity."""
+    u, w = np.asarray(q[:3], np.float64), float(q[3])
+    return v + 2 * np.cross(u, np.cross(u, v) + w * v)
+
+
+def ocupacion(ply: SplatPly, o: Opciones, log=print, rotacion=None):
     """Rejilla booleana (ejes de Unity) y su origen: vóxel ijk ocupa [origen + ijk·voxel, origen + (ijk+1)·voxel]."""
     c = ply.columns(["x", "y", "z", "opacity", "scale_0", "scale_1", "scale_2"])
     pos = c[:, :3].astype(np.float64)
     pos[:, 1] *= -1                                   # RDF -> Unity
+    if rotacion is not None:
+        pos = rotar(rotacion, pos)                    # nivelada: marco del mundo
     keep = (sigmoid(c[:, 3]) > o.min_alfa) & (np.exp(c[:, 4:7].max(1)) < o.max_sigma) & np.isfinite(pos).all(1)
     pos = pos[keep]
     log(f"  {keep.sum():,} de {len(keep):,} splats son superficie (alfa > {o.min_alfa}, sigma < {o.max_sigma} m)")
@@ -117,10 +127,14 @@ def zonas_libres(occ, origin, voxel, n=16, separacion=3.0, min_holgura=0.8, alto
     return out
 
 
-def build(ply: SplatPly, o: Opciones = None, log=print):
-    """Manifiesto de colisiones: cajas (cx, cy, cz, sx, sy, sz) en metros y ejes de Unity y zonas libres (x, z, holgura)."""
+def build(ply: SplatPly, o: Opciones = None, log=print, rotacion=None):
+    """
+    Manifiesto de colisiones: cajas (cx, cy, cz, sx, sy, sz) en metros y ejes de Unity y zonas libres (x, z, holgura).
+    Con `rotacion`, en el marco del mundo (nivelado: "nivelado": true); sin ella, en el de las pirámides.
+    """
     o = o or Opciones()
-    occ, origin = ocupacion(ply, o, log)
+    nivelado = rotacion is not None and not np.allclose(rotacion, [0, 0, 0, 1])
+    occ, origin = ocupacion(ply, o, log, rotacion if nivelado else None)
     occ = limpiar(occ, origin, o, log)
     b = cajas(occ)
     centro = origin + (b[:, :3] + b[:, 3:] / 2) * o.voxel
@@ -130,7 +144,11 @@ def build(ply: SplatPly, o: Opciones = None, log=print):
         f"{zonas[0][2] if zonas else 0:.1f} m de holgura)")
     return {
         "version": 1,
-        "convencion": "Ejes de Unity (x, -y, z del PLY RDF), mismo marco que las pirámides; suelo en y = 0",
+        "convencion": ("Ejes de Unity (x, -y, z del PLY RDF) con la rotacion_unity aplicada (marco del mundo)"
+                       if nivelado else "Ejes de Unity (x, -y, z del PLY RDF), mismo marco que las pirámides")
+                      + "; suelo en y = 0",
+        "nivelado": bool(nivelado),
+        "rotacion_aplicada": [float(v) for v in rotacion] if nivelado else None,
         "voxel_m": o.voxel,
         "opciones": {k: getattr(o, k) for k in o.__dataclass_fields__},
         "min": (origin).round(4).tolist(),
