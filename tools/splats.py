@@ -298,44 +298,112 @@ def cmd_preparar(a):
     with open(os.path.join(out_info, "informe.json"), "w", encoding="utf-8") as f:
         json.dump(rep, f, indent=2, ensure_ascii=False)
     print_summary(rep)
-    if rep["suelo"]["inclinacion_grados"] > 10:
+    escala, inicio = a.escala or 1.0, None
+    if a.colmap:
+        # COLMAP no tiene gravedad ni escala: el suelo se busca guiado por las cámaras del vídeo y la escala sale de
+        # la altura a la que iba el móvil (plan 15 §14).
+        from live3d.splats import colmap
+        images = a.colmap if a.colmap.endswith(".txt") else os.path.join(a.colmap, "images.txt")
+        centers, ups, fwds = colmap.read_cameras(images)
+        suelo = colmap.floor_from_cameras(core["pos"], core["alpha"], core["finite"], centers, ups)
+        rep["suelo"] = suelo
+        if not a.escala:
+            escala = a.altura_camara / suelo["altura_camaras"]
+        print(f"  Cámaras COLMAP: {len(centers)} · suelo con normal {np.round(suelo['normal_arriba'], 3).tolist()} "
+              f"({suelo['angulo_con_camaras']:.1f}° del arriba medio de las cámaras, {suelo['inliers']:,} splats) · "
+              f"cámaras a {suelo['altura_camaras']:.2f} unidades del suelo → escala {escala:.4f} m/unidad "
+              f"(supuesto: móvil a {a.altura_camara} m)")
+        mid = int(np.argmin(np.linalg.norm(centers - np.median(centers, 0), axis=1)))
+        inicio = (centers[mid], fwds[mid])
+        with open(os.path.join(out_info, "informe.json"), "w", encoding="utf-8") as f:
+            json.dump(rep, f, indent=2, ensure_ascii=False)
+    elif rep["suelo"]["inclinacion_grados"] > 10:
         print(f"  ! El suelo está inclinado {rep['suelo']['inclinacion_grados']:.1f}° respecto al eje "
               f"{rep['suelo']['eje']}: revisa las vistas de {out_info} (la nivelación se aplica en Unity)")
 
     print("[2/4] Limpieza")
-    o = limpieza.Opciones(sh=a.sh)
+    o = limpieza.Opciones(sh=a.sh, max_sigma_diag=a.gigante, agujas_ratio=a.agujas, min_vecinos=a.vecinos)
     clean_path = os.path.join(base, f"limpio_sh{a.sh}.ply")
-    man = limpieza.clean(ply, clean_path, o, core, rep, extra, max_bytes=float("inf"))
+    man = limpieza.clean(ply, clean_path, o, core, rep, extra, max_bytes=float("inf"), escala=escala)
     man["licencia"] = leer_licencia(a.ply)
     with open(clean_path[:-4] + ".json", "w", encoding="utf-8") as f:
         json.dump(man, f, indent=2, ensure_ascii=False)
     print(f"  {man['splats_salida']:,} splats ({100 * man['splats_salida'] / ply.count:.1f} %) · quitados {man['quitados']}")
     del core, extra
+    camara = camara_inicio(man, inicio, a.altura_camara)
+    print(f"  Escala aplicada {escala:.4f} · cámara inicial en Unity {np.round(camara['pos'], 2).tolist()}")
 
     print("[3/4] Pirámides LOD")
     clean = SplatPly.open(clean_path)
+    # Trozos y niveles a la medida de la escena: en una escena pequeña, trozos de 3 m dejarían muy pocos y el salto
+    # entre el nivel 0 y el de 4 cm sería demasiado grande para repartir el presupuesto.
+    diag_m = rep["zona_principal"]["diagonal"] * escala
+    trozo = a.trozo or float(np.clip(diag_m / 20, 1.0, 3.0))
+    voxeles = (0.04, 0.08, 0.16, 0.32, 0.64, 1.28)
+    if clean.count < 3_000_000:
+        voxeles = (0.02,) + voxeles
+    print(f"  escena de {diag_m:.1f} m de diagonal: trozos de {trozo:.2f} m, vóxeles {list(voxeles)}")
     outputs = []
     for name, nivel_min in (("piramide", 0), ("piramide_quest", a.nivel_quest)):
         path = os.path.join(base, name + ".ply")
-        pm = piramide.build(clean, path, trozo=a.trozo, sh_degree=a.sh, nivel_minimo=nivel_min)
+        pm = piramide.build(clean, path, trozo=trozo, voxels=voxeles, sh_degree=a.sh, nivel_minimo=nivel_min)
         # gsplat no lee PLY de más de 2 GB: subir el nivel mínimo hasta caber.
         while os.path.getsize(path) > 1.9 * 2**30 and pm["nivel_minimo"] < len(pm["niveles_voxel_m"]) - 1:
             print(f"  ! {name}: {os.path.getsize(path) / 2**30:.2f} GB > 1,9 GB; nivel mínimo {pm['nivel_minimo'] + 1}")
-            pm = piramide.build(clean, path, trozo=a.trozo, sh_degree=a.sh, nivel_minimo=pm["nivel_minimo"] + 1)
+            pm = piramide.build(clean, path, trozo=trozo, voxels=voxeles, sh_degree=a.sh,
+                                nivel_minimo=pm["nivel_minimo"] + 1)
         pm.update(traslacion_restada=man["traslacion_restada"], rotacion_unity=man["rotacion_unity"],
-                  licencia=man["licencia"], nombre=a.nombre, coordenadas="RDF")
+                  escala_aplicada=escala, camara_inicio=camara, licencia=man["licencia"], nombre=a.nombre,
+                  coordenadas="RDF")
         with open(path[:-4] + ".json", "w", encoding="utf-8") as f:
             json.dump(pm, f, ensure_ascii=False)
         outputs.append(path)
         print(f"  {name}: {pm['splats_total']:,} splats, {os.path.getsize(path) / 2**20:.0f} MB")
 
+    # Colisiones para la escena VR (plan 15 G5): mismo marco que las pirámides (metros, suelo en y = 0).
+    from live3d.splats import colision
+    cman, occ, corigin = colision.build(clean, colision.Opciones())
+    col_path = os.path.join(base, "colision.json")
+    with open(col_path, "w", encoding="utf-8") as f:
+        json.dump(cman, f, ensure_ascii=False)
+    colision.vista_planta(occ, corigin, colision.Opciones().voxel, os.path.join(base, "colision_planta.png"))
+    print(f"  colisiones: {len(cman['cajas']) // 6:,} cajas, {len(cman.get('zonas_libres', [])) // 3} zonas libres")
+
     if a.unity:
         print("[4/4] Exportación a Unity")
         exportar_unity(a.unity, a.nombre, outputs, leer_licencia(a.ply))
+        exportar_texto(a.unity, a.nombre, col_path)
     else:
         print("[4/4] Sin --unity: no se exporta")
     print(f"Listo en {time.time() - t0:.0f} s")
     return 0
+
+
+def _rotate(q, v):
+    """Rota v con el cuaternión q = (x, y, z, w)."""
+    x, y, z, w = q
+    u = np.array([x, y, z])
+    v = np.asarray(v, np.float64)
+    return v + 2 * np.cross(u, np.cross(u, v) + w * v)
+
+
+def camara_inicio(man, inicio, altura):
+    """
+    Pose inicial de la cámara en ejes de Unity (con la rotación de nivelación ya aplicada): la cámara COLMAP central
+    del recorrido si la hay, si no el centro del suelo a `altura` m mirando a +z.
+    """
+    q = man["rotacion_unity"]
+    if inicio is None:
+        return {"pos": [0.0, float(altura), 0.0], "adelante": [0.0, 0.0, 1.0]}
+    c, f = inicio
+    t = np.asarray(man["traslacion_restada"])
+    s = man.get("escala_aplicada", 1.0)
+    rdf = np.array([1.0, -1.0, 1.0])                 # archivo -> Unity al importar en RDF
+    pos = _rotate(q, (c - t) * s * rdf)
+    fwd = _rotate(q, f * rdf)
+    fwd[1] = 0.0
+    fwd /= max(np.linalg.norm(fwd), 1e-9)
+    return {"pos": [float(v) for v in pos], "adelante": [float(v) for v in fwd]}
 
 
 _PLY_META = """fileFormatVersion: 2
@@ -591,9 +659,17 @@ def main():
     p.add_argument("ply", help="escena 3DGS original (.ply)")
     p.add_argument("--nombre", required=True, help="nombre del entorno (carpeta en Unity y título de la escena)")
     p.add_argument("--unity", help="ruta del proyecto Unity (VR ScanWorld) para exportar las pirámides")
-    p.add_argument("--trozo", type=float, default=3.0)
+    p.add_argument("--trozo", type=float, help="lado de los trozos (m); por defecto diagonal/20 entre 1 y 3 m")
     p.add_argument("--sh", type=int, default=1)
     p.add_argument("--nivel-quest", type=int, default=1, help="nivel mínimo de la pirámide de Quest 2")
+    p.add_argument("--agujas", type=float, default=10.0,
+                   help="quitar agujas (σ1/σ2 mayor que esto, > 3 cm y alfa < 0,35); 0 = no filtrar")
+    p.add_argument("--vecinos", type=int, default=16,
+                   help="quitar splats con menos vecinos (niebla y flotantes de zonas poco vistas)")
+    p.add_argument("--colmap", help="carpeta sparse/0 (o images.txt) del modelo COLMAP: suelo, escala y cámara inicial")
+    p.add_argument("--altura-camara", type=float, default=1.5, help="altura del móvil al grabar (m), para la escala")
+    p.add_argument("--escala", type=float, help="metros por unidad del archivo (si se conoce; anula la estimada)")
+    p.add_argument("--gigante", type=float, default=0.05, help="quitar σ máx mayor que esta fracción de la diagonal")
     p.set_defaults(func=cmd_preparar)
     p = sub.add_parser("colision", help="cajas de colisión del entorno para Unity (suelo, paredes, bancos)")
     p.add_argument("ply", help="escena limpia (salida de 'limpiar'): mismo marco que las pirámides")

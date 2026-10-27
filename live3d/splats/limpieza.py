@@ -22,9 +22,14 @@ class Opciones:
     min_opacidad: float = 0.01
     max_sigma_diag: float = 0.02    # σ máxima como fracción de la diagonal de la zona principal
     sh: int = 3                     # grado SH de salida
+    # Agujas: splats muy alargados, grandes y casi transparentes (artefacto típico de MCMC en zonas poco vistas).
+    # Los finos reales (barrotes, marcos) son opacos y se quedan. agujas_ratio = 0 desactiva el filtro.
+    agujas_ratio: float = 0.0       # σ1/σ2 mínimo
+    agujas_min_sigma: float = 0.03  # m (σ1 mínimo, ya en metros: se compara con σ × escala)
+    agujas_max_alfa: float = 0.35
 
 
-def masks(core, rep, extra, o: Opciones):
+def masks(core, rep, extra, o: Opciones, escala=1.0):
     """Máscaras booleanas (True = quitar) por criterio."""
     lo = np.array(rep["zona_principal"]["min"])
     hi = np.array(rep["zona_principal"]["max"])
@@ -36,6 +41,10 @@ def masks(core, rep, extra, o: Opciones):
     m["aislado"] = fin & extra["inside"] & (extra["neigh"] < o.min_vecinos)
     m["transparente"] = fin & (core["alpha"] < o.min_opacidad)
     m["gigante"] = fin & (core["sigma"][:, 0] > o.max_sigma_diag * diag)
+    if o.agujas_ratio > 0:
+        sig = core["sigma"]
+        m["aguja"] = (fin & (sig[:, 0] > o.agujas_ratio * np.maximum(sig[:, 1], 1e-12))
+                      & (sig[:, 0] * escala > o.agujas_min_sigma) & (core["alpha"] < o.agujas_max_alfa))
     return m
 
 
@@ -83,17 +92,19 @@ def unity_rotation(rep):
 MAX_BYTES = int(1.8 * 2**30)   # gsplat (C#) no lee archivos de más de 2 GB: se parte la salida
 
 
-def clean(ply: SplatPly, out_path, o: Opciones, core=None, rep=None, extra=None, max_bytes=None):
+def clean(ply: SplatPly, out_path, o: Opciones, core=None, rep=None, extra=None, max_bytes=None, escala=1.0):
     """
     Escribe la escena limpia y devuelve el manifiesto (dict). Si pasa de max_bytes (por defecto MAX_BYTES) se parte en
     trozos contiguos a lo largo de z (<nombre>_p0.ply, _p1.ply…): el manifiesto lista las partes en "partes".
     max_bytes=float("inf") escribe siempre un solo archivo (entrada intermedia, p. ej. para la pirámide).
+    escala: multiplica la escena (tras trasladarla) para pasar sus unidades a metros (COLMAP no tiene escala): posiciones
+    × escala y log-escalas + ln(escala); SH y rotaciones no cambian con una escala uniforme.
     """
     if core is None:
         core = analisis.load_core(ply)
     if rep is None or extra is None:
         rep, extra = analisis.inspect(ply, core)
-    mk = masks(core, rep, extra, o)
+    mk = masks(core, rep, extra, o, escala)
     drop = np.zeros(ply.count, bool)
     for v in mk.values():
         drop |= v
@@ -104,6 +115,12 @@ def clean(ply: SplatPly, out_path, o: Opciones, core=None, rep=None, extra=None,
         cols["x"] = cols["x"] - np.float32(origin[0])
         cols["y"] = cols["y"] - np.float32(origin[1])
         cols["z"] = cols["z"] - np.float32(origin[2])
+        if escala != 1.0:
+            for c in ("x", "y", "z"):
+                cols[c] = cols[c] * np.float32(escala)
+            for c in ("scale_0", "scale_1", "scale_2"):
+                if c in cols:
+                    cols[c] = cols[c] + np.float32(np.log(escala))
         return cols
 
     sh_out = min(o.sh, ply.sh_degree)
@@ -136,6 +153,7 @@ def clean(ply: SplatPly, out_path, o: Opciones, core=None, rep=None, extra=None,
         "opciones": asdict(o),
         "sh_salida": sh_out,
         "traslacion_restada": origin.tolist(),
+        "escala_aplicada": float(escala),
         "convencion": "Importar en gsplat como RDF ((x, y, z) -> Unity (x, -y, z)). Solo trasladado: el centro del "
                       "suelo queda en el origen; la nivelación va en Unity como rotación del objeto (rotacion_unity).",
         "inclinacion_suelo_grados": rep["suelo"]["inclinacion_grados"],

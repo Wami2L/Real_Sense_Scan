@@ -136,7 +136,8 @@ python app.py --synthetic-object   # escáner de objetos sin cámaras (plato gir
 python -m live3d.unity_link        # enlace con Unity (5010); --red para otros equipos (token)
 python tools/generar_base_escaneo.py --hoja A3   # hoja imprimible de la base de escaneo
 python tools/reprocesar_objeto.py Saves/<fecha>/objeto_HHMMSS [--reemplazar <id>]  # rehacer un objeto sin cámara
-python tools/splats.py info|camaras|limpiar|estacion|lod|comparar ...  # escenas 3DGS (plan 15 §7, §12)
+python tools/splats.py info|camaras|limpiar|estacion|lod|piramide|colision|comparar ...  # escenas 3DGS (plan 15 §7, §12)
+python tools/splats.py preparar <escena.ply> --nombre X --colmap <sparse/0> --unity <proyecto>  # escena propia -> Unity (§14)
 .venv-splats\Scripts\python tools/destilar.py <lod.ply> --maestro <limpio.ply>  # destilación (PyTorch+gsplat, plan 15 §12.6)
 python -m live3d.tools.probe_client  # cliente WS de prueba
 python -m pip install -r requirements-dev.txt

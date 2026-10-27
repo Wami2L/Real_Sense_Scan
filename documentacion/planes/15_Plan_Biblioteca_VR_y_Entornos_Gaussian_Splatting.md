@@ -604,6 +604,34 @@ Quest 150 k). Escenas nuevas: `python tools/splats.py preparar <escena.ply> --no
 
 Pendiente: menú genérico de Unity para las escenas exportadas por `preparar`, destilar la pirámide, probar en el visor.
 
+## 14. Escenas propias: del vídeo a Unity con un comando (2026-10-27)
+
+Primera escena propia: el lavadero de azulejos de `vid_20260321_134921` (vídeo → RealityScan → COLMAP → LichtFeld
+Studio, MCMC, 1 M de splats, SH3, 248 MB; flujo en `Documents/Photogrametry Workflow`).
+
+**Problema**: COLMAP no fija gravedad ni escala. El detector de suelo (busca un plano alineado con un eje) fallaba:
+se ve poco suelo, y el "arriba" medio de las cámaras sale inclinado ~20° porque el móvil apuntaba hacia abajo.
+**Solución** (`live3d/splats/colmap.py`, `preparar --colmap <sparse/0>`): RANSAC del suelo entre los splats bajos,
+guiado por el arriba de las cámaras (±35°); la escala sale de la altura de las cámaras sobre ese suelo
+(`--altura-camara`, 1,5 m por defecto; `--escala` la fija a mano). Aquí: suelo = −y (0,1° de inclinación),
+cámaras a 11,57 unidades → **0,13 m/unidad** (escena de ~3,8 × 3 × 5,6 m). La nivelación va como rotación del
+objeto en Unity y la cámara inicial es la cámara central del recorrido.
+
+**Limpieza nueva** (por defecto en `preparar`): agujas fantasma (σ1/σ2 > 10, > 3 cm, alfa < 0,35; los barrotes
+opacos se quedan) y niebla con menos de 16 vecinos (alfa mediana 0,08-0,10). En el lavadero quitaron 27 k y 38 k
+splats y casi todas las manchas flotantes; en la iglesia solo el 0,6 % y el 0,3 %. Quedan algunas agujas opacas
+sueltas en zonas que el vídeo no vio.
+
+**Pirámide a la medida**: trozos de diagonal/20 (1-3 m) y un nivel de 2 cm si la escena tiene < 3 M splats; sin eso
+el presupuesto de una escena pequeña saltaba de todo-original a todo-4 cm (90 k splats en vez de 600 k).
+
+Comando completo (8 s para 1 M de splats) y escena en Unity:
+```
+python tools/splats.py preparar "<...>/resultados/<escena>.ply" --nombre <escena> --colmap "<...>/proyectos/<escena>/colmap/sparse/0" --unity "<VR ScanWorld>"
+```
+Unity › ScanWorld › Crear escenas de entornos exportados → `Scenes/Entorno_<escena>.unity` (1 = LOD PC 600 k,
+2 = perfil Quest 150 k; cámara de vuelo). `preparar` deja también `colision.json` para una escena VR con el rig.
+
 ---
 
 ## Fuentes

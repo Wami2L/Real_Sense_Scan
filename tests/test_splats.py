@@ -232,3 +232,43 @@ def test_piramide_rangos_y_niveles(scene):
                            for t in man["trozos"]])
     key = lambda a: np.sort(a.view(np.dtype((np.void, a.dtype.itemsize * 3))).ravel())   # noqa: E731
     assert np.isin(key(np.ascontiguousarray(lvl0)), key(np.ascontiguousarray(orig))).all()
+
+
+def test_suelo_y_escala_desde_camaras_colmap(tmp_path):
+    """Escena de COLMAP sin gravedad ni escala: el suelo (y = 2, arriba = -y) se encuentra aunque el "arriba" medio
+    de las cámaras esté inclinado 20° (móvil apuntando hacia abajo), y su altura sobre él da la escala."""
+    from live3d.splats import colmap
+    rng = np.random.default_rng(5)
+    floor = np.c_[rng.uniform(-5, 5, 30000), np.full(30000, 2.0), rng.uniform(-5, 5, 30000)]
+    wall = np.c_[rng.uniform(-5, 5, 20000), rng.uniform(-6, 2, 20000), np.full(20000, 5.0)]
+    pos = np.vstack([floor, wall]).astype(np.float32)
+    alpha = np.full(len(pos), 0.9, np.float32)
+    centers = np.c_[np.linspace(-3, 3, 50), np.full(50, 2.0 - 11.5), np.zeros(50)]   # 11,5 unidades sobre el suelo
+    tilt = np.radians(20)
+    ups = np.tile([0.0, -np.cos(tilt), np.sin(tilt)], (50, 1))
+    s = colmap.floor_from_cameras(pos, alpha, np.ones(len(pos), bool), centers, ups)
+    assert s["eje"] == "-y" and s["inclinacion_grados"] < 1.0
+    assert abs(s["altura_camaras"] - 11.5) < 0.1
+    assert 15 < s["angulo_con_camaras"] < 25
+    # images.txt mínimo: una cámara en el origen mirando a +z.
+    txt = tmp_path / "images.txt"
+    txt.write_text("# c\n1 1 0 0 0 0 0 0 1 a.jpg\n\n")
+    c, u, f = colmap.read_cameras(str(txt))
+    assert np.allclose(c, 0) and np.allclose(u, [[0, -1, 0]]) and np.allclose(f, [[0, 0, 1]])
+
+
+def test_filtro_de_agujas():
+    """Solo se quitan las agujas largas y casi transparentes; las finas opacas (barrotes) se quedan."""
+    n = 4
+    core = {
+        "pos": np.zeros((n, 3), np.float32), "finite": np.ones(n, bool),
+        "alpha": np.array([0.1, 0.9, 0.1, 0.1], np.float32),
+        "sigma": np.array([[0.2, 0.005, 0.004],      # aguja fantasma -> fuera
+                           [0.2, 0.005, 0.004],      # barrote opaco -> se queda
+                           [0.01, 0.0005, 0.0004],   # alargada pero diminuta -> se queda
+                           [0.2, 0.1, 0.004]], np.float32),   # disco plano, no aguja -> se queda
+    }
+    rep = {"zona_principal": {"min": [-1, -1, -1], "max": [1, 1, 1], "diagonal": 3.46}}
+    extra = {"inside": np.ones(n, bool), "neigh": np.full(n, 100)}
+    m = limpieza.masks(core, rep, extra, limpieza.Opciones(agujas_ratio=10), escala=1.0)
+    assert m["aguja"].tolist() == [True, False, False, False]
