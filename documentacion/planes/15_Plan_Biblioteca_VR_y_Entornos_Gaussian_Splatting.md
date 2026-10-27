@@ -653,7 +653,9 @@ el paso (`[n/4]`), el registro y un botón de cancelar. Deduce el nombre y la ca
 
 Se quitaron las herramientas de editor propias de la iglesia (`EntornoSetup`, `IglesiaVRSetup`) y el menú de
 entornos exportados: `Entornos.cs` (escena de escritorio) y `EntornoVR.cs` (escena VR) sirven para cualquier entorno,
-la iglesia incluida (`Entorno_Iglesia.unity`). Verificación sin editor: `Entornos.BatchCrearYCapturar` y
+la iglesia incluida (`Entorno_Iglesia.unity`). Las escenas `Iglesia.unity` e `IglesiaVR.unity` se conservan como
+**prueba de estrés** (variante 4 = escena completa de 9,8 M splats), guardadas tal cual, sin herramienta que las
+regenere. Verificación sin editor: `Entornos.BatchCrearYCapturar` y
 `EntornoVR.BatchCrearYCapturar` (`-entorno <nombre>` para uno solo).
 
 ---
