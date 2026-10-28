@@ -1,0 +1,113 @@
+{
+ "nombre": "Iglesia",
+ "titulo": "Colegiata de San Mauricio",
+ "lugar": "Kroměříž, República Checa",
+ "ply": "Saves/entornos/escena1/limpio_sh1.ply",
+ "voz": "Microsoft Helena Desktop",
+ "nota": "Cajas en ejes de Unity del PLY limpio (x, -y, z del archivo RDF), suelo en y = 0. 'frente' = hacia dónde mira el objeto (desde donde se ve); 'vista' = dónde ponerse (suelo) si el punto calculado delante del objeto no sirve. Fuentes de los textos: Wikipedia checa (Kostel svatého Mořice), turistika.cz, ancient-history-sites.com; revisar antes de difundir.",
+ "pronunciacion": {
+  "Kroměříž": "Króm-yer-zhish",
+  "Schauenburg": "Sháuenburg",
+  "Sommerau-Beckh": "Sómerau Bek",
+  "Schrattenbach": "Shrátenbaj",
+  "Wolfgang Hannibal": "Vólfgang Ánibal",
+  "Egkh": "Ek",
+  "Liechtenstein-Castelcorn": "Lijtenshtáin Kastelcórn",
+  "Thurzo": "Túrzo",
+  "Stanislav": "Stánislaf",
+  "Olomouc": "Ólomouts",
+  "Deutschmann": "Dóichman",
+  "Jakob": "Yákob",
+  "Anton Petter": "Ánton Péter",
+  "Antonín Cyril Stojan": "Ántoñin Tsíril Stóyan",
+  "Karel": "Kárel",
+  "Moravia": "Morávia"
+ },
+ "inicio":{"pos": [0.0, 0.0, -17.5], "mirar": [0.0, 0.0, 1.0]},
+ "bienvenida": {
+  "titulo": "Bienvenido a la colegiata de San Mauricio",
+  "texto": "Estás en una de las mayores iglesias góticas de la República Checa, en Kroměříž, en Moravia. La mandó levantar hacia 1260 el obispo Bruno de Schauenburg, fundador de la ciudad. Recorre la iglesia libremente: los puntos dorados marcan lugares con historia. Acércate a uno para escuchar su relato y selecciona el objeto para verlo de cerca en la sala de inspección."
+ },
+ "puntos": [
+  {
+   "id": "nave",
+   "titulo": "Una iglesia de tres naves iguales",
+   "subtitulo": "Gótico, siglos XIII-XIV · restauración del siglo XIX",
+   "posicion": [0.0, 0.0, -6.0],
+   "texto": "San Mauricio es una iglesia de salón: sus tres naves tienen casi la misma altura y la luz entra por los altos ventanales ojivales. Las bóvedas de crucería descansan sobre pilares trapezoidales. Fue saqueada dos veces por los husitas, reparada tras la guerra de los Treinta Años y dañada por varios incendios. Tras el gran incendio de 1836, el arzobispo Sommerau-Beckh la restauró devolviéndole su aire gótico. Desde 1973 es monumento cultural protegido."
+  },
+  {
+   "id": "retablo_mayor",
+   "titulo": "El retablo mayor y San Mauricio",
+   "subtitulo": "Presbiterio · cuadro de Anton Petter (Viena)",
+   "texto": "El retablo neogótico preside el presbiterio, cubierto por una bóveda de seis partes cerrada en 1344. Su cuadro, del pintor vienés Anton Petter, muestra a San Mauricio, comandante de la legión tebana, martirizado según la tradición por negarse a perseguir a otros cristianos. Bruno de Schauenburg eligió este patrón porque había sido preboste de San Mauricio de Magdeburgo, algo poco habitual en tierras checas. El propio Bruno fue enterrado ante el altar mayor en 1281.",
+   "objeto": {"caja": {"min": [-3.8, 0.0, 23.4], "max": [4.5, 17.0, 26.6]}, "frente": [0, 0, -1]}
+  },
+  {
+   "id": "portal_capilla",
+   "titulo": "La entrada a la capilla de los Dolores",
+   "subtitulo": "Barroco · portal de 1755",
+   "texto": "Este arco de mármol, columnas corintias y adornos dorados da paso a la capilla de la Virgen de los Dolores, añadida en 1730 en el lado norte de la iglesia. Su portal se terminó en 1755. Se considera uno de los interiores barrocos más bellos de las tierras checas, un contraste deliberado con la sobriedad gótica de la nave. Desde 1887 hay constancia de peregrinaciones a esta capilla el Viernes de Dolores.",
+   "objeto": {"caja": {"min": [-8.6, 0.0, -6.5], "max": [-6.8, 9.8, 1.0]}, "frente": [1, 0, 0]}
+  },
+  {
+   "id": "altar_piedad",
+   "titulo": "El altar de la Piedad",
+   "subtitulo": "Capilla de la Virgen de los Dolores · hacia 1730",
+   "texto": "En el centro del altar, la Virgen sostiene a su hijo muerto, rodeada de ángeles, rayos dorados y mármoles oscuros. La capilla se construyó probablemente como lugar de sepultura del cardenal Wolfgang Hannibal de Schrattenbach, obispo de Olomouc. Aquí están los monumentos funerarios barrocos de Schrattenbach y del obispo Leopold Egkh; la tumba de plomo de Egkh fue restaurada a principios de este siglo.",
+   "objeto": {"caja": {"min": [-20.2, 0.0, -5.5], "max": [-16.5, 8.5, 0.0]}, "frente": [1, 0, 0]}
+  },
+  {
+   "id": "placa_heraldica",
+   "titulo": "La memoria de dos obispos",
+   "subtitulo": "Placa heráldica · hacia 1679",
+   "texto": "Bajo un cortinaje de piedra pintada aparecen dos escudos episcopales con sus mitras y dos cartelas con inscripciones latinas. El obispo Karel de Liechtenstein-Castelcorn mandó colocar estas placas hacia 1679, cuando la iglesia se reamuebló tras la guerra de los Treinta Años, para recordar al fundador, Bruno de Schauenburg, y al obispo Stanislav Thurzo, gran mecenas del Renacimiento en Moravia.",
+   "objeto": {"caja": {"min": [-8.45, 2.8, -9.5], "max": [-7.3, 6.3, -7.05]}, "frente": [1, 0, 0]}
+  },
+  {
+   "id": "viacrucis",
+   "titulo": "Una estación del Vía Crucis",
+   "subtitulo": "Relieve policromado",
+   "texto": "Las catorce estaciones del Vía Crucis recorren los muros de la iglesia. Cada relieve, tallado y pintado, narra un momento de la Pasión para que los fieles la recorran rezando. En esta escena, varias figuras sostienen el cuerpo de Cristo junto a la cruz. Observa cómo el relieve juega con la profundidad: las figuras del fondo apenas sobresalen y las del frente casi se separan del muro.",
+   "vista": [-5.6, 0, -10.15],
+   "objeto": {"caja": {"min": [-8.05, 2.93, -10.5], "max": [-7.6, 3.73, -9.82]}, "frente": [1, 0, 0]}
+  },
+  {
+   "id": "organo",
+   "titulo": "El órgano",
+   "subtitulo": "Caja de 1854 · Jakob Deutschmann (Viena)",
+   "texto": "Sobre la tribuna occidental, bajo el rosetón neogótico, se alza el órgano. Su caja de cinco cuerpos, con agujas y tracerías góticas, es obra de 1854 del maestro organero vienés Jakob Deutschmann. La música tiene aquí una larga tradición: la colegiata es célebre por su colección musical de la segunda mitad del siglo XVII, de la época en que Kroměříž era residencia de los obispos de Olomouc.",
+   "vista": [0.6, 0, -8.5],
+   "objeto": {"caja": {"min": [-3.3, 5.4, -21.8], "max": [4.7, 14.6, -17.0]}, "frente": [0, 0, 1]}
+  },
+  {
+   "id": "silleria",
+   "titulo": "La sillería de los canónigos",
+   "subtitulo": "Presbiterio · madera tallada",
+   "texto": "San Mauricio no fue una catedral sino una colegiata: Bruno fundó junto a ella un cabildo de seis canónigos, un preboste y un decano. Desde estos asientos de madera tallada, con sus remates de hojarasca, el cabildo celebraba la misa y cantaba cada día la liturgia de las horas. Entre sus prebostes estuvo Antonín Cyril Stojan, más tarde arzobispo de Olomouc, cuyo busto está junto a la entrada lateral.",
+   "objeto": {"caja": {"min": [-4.05, 0.0, 10.35], "max": [-2.0, 3.8, 14.25]}, "frente": [1, 0, 0]}
+  },
+  {
+   "id": "portal_timpano",
+   "titulo": "Una puerta ojival en el presbiterio",
+   "subtitulo": "Portal gótico con tímpano esculpido",
+   "texto": "En el muro del presbiterio se abre esta puerta de arco apuntado. Sobre ella, el tímpano guarda un relieve con figuras sagradas, una forma típica del gótico de enseñar la fe a quien entraba. Las hojas de madera, con tracerías y tiradores dorados, son de la renovación neogótica. Las puertas del presbiterio comunicaban con las dependencias del cabildo, como la sacristía, donde se conserva el portal renacentista más destacado de la ciudad.",
+   "objeto": {"caja": {"min": [-3.95, 0.0, 7.45], "max": [-3.2, 3.95, 9.2]}, "frente": [1, 0, 0]}
+  },
+  {
+   "id": "altar_descendimiento",
+   "titulo": "Un altar lateral neogótico",
+   "subtitulo": "Siglo XIX · escena de la Pasión",
+   "texto": "Los altares laterales de la iglesia siguen el mismo lenguaje neogótico de la restauración del siglo XIX: pináculos, arcos apuntados, tracerías doradas y pequeñas esculturas de santos en hornacinas. En el cuadro central, Cristo es bajado de la cruz y recibido por su madre y sus discípulos. Estos retablos imitan la arquitectura de las catedrales a escala de mueble, como pequeñas iglesias dentro de la iglesia.",
+   "objeto": {"caja": {"min": [5.0, 0.0, 4.1], "max": [8.9, 11.7, 6.3]}, "frente": [0, 0, -1]}
+  },
+  {
+   "id": "santo_baldaquino",
+   "titulo": "Un santo bajo su baldaquino",
+   "subtitulo": "Escultura sobre ménsula · estilo neogótico",
+   "texto": "Adosada a un pilar, esta imagen de un santo descansa sobre una ménsula con paño rojo y bajo un baldaquino de pináculos. Colocar esculturas en los pilares, a la altura de la mirada, acercaba los santos a los fieles que ocupaban los bancos. Fíjate en el contraste entre la piedra lisa del pilar gótico y la finura de la talla del dosel.",
+   "vista": [6.4, 0, -12.6],
+   "objeto": {"caja": {"min": [4.1, 1.0, -11.4], "max": [5.4, 3.7, -10.4]}, "frente": [0.67, 0, -0.74]}
+  }
+ ]
+}

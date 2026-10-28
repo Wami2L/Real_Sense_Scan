@@ -441,6 +441,31 @@ TextScriptImporter:
   assetBundleName:
   assetBundleVariant:
 """
+# Narración: mono, cargada al usarse y comprimida (Vorbis), igual en PC y Quest.
+_AUDIO_META = """fileFormatVersion: 2
+guid: {guid}
+AudioImporter:
+  externalObjects: {{}}
+  serializedVersion: 8
+  defaultSettings:
+    serializedVersion: 2
+    loadType: 1
+    sampleRateSetting: 0
+    sampleRateOverride: 44100
+    compressionFormat: 1
+    quality: 0.7
+    conversionMode: 0
+    preloadAudioData: 0
+  platformSettingOverrides: {{}}
+  forceToMono: 1
+  normalize: 1
+  loadInBackground: 1
+  ambisonic: 0
+  3D: 1
+  userData:
+  assetBundleName:
+  assetBundleVariant:
+"""
 
 
 def exportar_unity(unity_project, nombre, plys, licencia):
@@ -503,6 +528,84 @@ def cmd_colision(a):
     print(f"{out}: {len(man['cajas']) // 6:,} cajas ({time.time() - t0:.0f} s)")
     if a.unity:
         exportar_texto(a.unity, a.nombre, out)
+    return 0
+
+
+def cmd_experiencia(a):
+    """
+    Experiencia de visita (rama ExperienceDemo): recorta los objetos de la definición, genera la narración y deja
+    todo en <proyecto Unity>/Assets/ScanWorld/Entornos/<nombre>/experiencia/ (o en <entorno>/experiencia sin --unity).
+    """
+    import uuid
+    from live3d.splats import experiencia as ex
+    t0 = time.time()
+    d = ex.cargar_definicion(a.definicion)
+    ply_path = d["ply"] if os.path.isabs(d["ply"]) else os.path.join(REPO, d["ply"])
+    if a.unity:
+        out = os.path.join(a.unity, "Assets", "ScanWorld", "Entornos", d["nombre"], "experiencia")
+    else:
+        out = os.path.join(entorno_dir(ply_path), "experiencia")
+    os.makedirs(out, exist_ok=True)
+
+    def meta(path, tpl):
+        if a.unity and not os.path.exists(path + ".meta"):
+            with open(path + ".meta", "w", encoding="utf-8", newline="\n") as f:
+                f.write(tpl.format(guid=uuid.uuid4().hex))
+
+    solo = set(a.solo.split(",")) if a.solo else None
+    puntos = [p for p in d["puntos"] if solo is None or p["id"] in solo]
+    previo = {}
+    manifiesto = os.path.join(out, "experiencia.json")
+    if os.path.exists(manifiesto):                 # lo ya generado de los puntos que no se rehacen
+        with open(manifiesto, encoding="utf-8") as f:
+            previo = {p["id"]: p for p in json.load(f).get("puntos", [])}
+
+    if not a.sin_objetos:
+        ply = SplatPly.open(ply_path)
+        splats = ex.leer_splats(ply)
+        o = ex.Opciones()
+        for p in puntos:
+            if "objeto" not in p:
+                continue
+            dst = os.path.join(out, p["id"] + ".ply")
+            p["objeto"].pop("ply_quest", None)
+            p["objeto"].update(ex.recortar(ply, splats, dict(p["objeto"], id=p["id"]), dst, o))
+            p["objeto"]["ply"] = p["id"] + ".ply"
+            meta(dst, _PLY_META)
+            if "ply_quest" in p["objeto"]:
+                meta(os.path.join(out, p["objeto"]["ply_quest"]), _PLY_META)
+            print(f"  {p['id']}: {p['objeto']['splats']:,} splats, pivote {p['objeto']['pivote']}")
+
+    if not a.sin_audio:
+        voz = ex.elegir_voz(a.voz or d.get("voz"))
+        pron = d.get("pronunciacion")
+        textos = [(os.path.join(out, p["id"] + ".wav"), ex.texto_narracion(p, pron)) for p in puntos]
+        if "bienvenida" in d and solo is None:
+            textos.append((os.path.join(out, "bienvenida.wav"), ex.texto_narracion(d["bienvenida"], pron)))
+        print(f"  narración con «{voz}» ({len(textos)} audios)…")
+        ex.narrar(textos, voz, a.ritmo)
+        for wav, _ in textos:
+            meta(wav, _AUDIO_META)
+
+    # Manifiesto resuelto: lo nuevo de esta pasada + lo previo de los demás puntos.
+    for p in d["puntos"]:
+        if solo is not None and p["id"] not in solo and p["id"] in previo:
+            p.update({k: v for k, v in previo[p["id"]].items() if k in ("objeto", "audio", "duracion_s")})
+        if "objeto" in p and not os.path.exists(os.path.join(out, p["id"] + "_quest.ply")):
+            p["objeto"].pop("ply_quest", None)
+        wav = os.path.join(out, p["id"] + ".wav")
+        if os.path.exists(wav):
+            p["audio"] = p["id"] + ".wav"
+            p["duracion_s"] = round(ex.duracion_wav(wav), 2)
+        if "objeto" in p and "ply" not in p["objeto"] and os.path.exists(os.path.join(out, p["id"] + ".ply")):
+            p["objeto"]["ply"] = p["id"] + ".ply"
+    if "bienvenida" in d and os.path.exists(os.path.join(out, "bienvenida.wav")):
+        d["bienvenida"]["audio"] = "bienvenida.wav"
+    d["licencia"] = leer_licencia(ply_path)
+    with open(manifiesto, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=1, ensure_ascii=False)
+    meta(manifiesto, _TEXT_META)
+    print(f"{manifiesto} ({time.time() - t0:.0f} s)")
     return 0
 
 
@@ -579,7 +682,13 @@ def cmd_comparar(a):
 
 def leer_licencia(ply_path):
     p = os.path.join(os.path.dirname(os.path.abspath(ply_path)), "license.txt")
-    return open(p, encoding="utf-8").read().strip() if os.path.exists(p) else None
+    if os.path.exists(p):
+        return open(p, encoding="utf-8").read().strip()
+    man = ply_path[:-4] + ".json"                   # PLY derivado (limpio_shN): la licencia va en su manifiesto
+    if os.path.exists(man):
+        with open(man, encoding="utf-8") as f:
+            return json.load(f).get("licencia")
+    return None
 
 
 def print_summary(r):
@@ -697,6 +806,15 @@ def main():
     p.add_argument("--unity", help="ruta del proyecto Unity (VR ScanWorld) para copiar colision.json")
     p.add_argument("--nombre", default="Iglesia", help="carpeta del entorno en Unity")
     p.set_defaults(func=cmd_colision)
+    p = sub.add_parser("experiencia", help="visita guiada: recortes de objetos + narración para Unity")
+    p.add_argument("definicion", help="JSON de la experiencia (experiencias/<nombre>.json)")
+    p.add_argument("--unity", help="ruta del proyecto Unity (VR ScanWorld); sin ella, a <entorno>/experiencia")
+    p.add_argument("--solo", help="ids de puntos a rehacer, separados por comas")
+    p.add_argument("--sin-objetos", action="store_true", help="no recortar (solo textos y audio)")
+    p.add_argument("--sin-audio", action="store_true", help="no generar la narración")
+    p.add_argument("--voz", help="nombre de la voz de Windows (por defecto, la primera es-ES)")
+    p.add_argument("--ritmo", type=int, default=-1, help="velocidad de la voz (-10 … 10)")
+    p.set_defaults(func=cmd_experiencia)
     p = sub.add_parser("comparar", help="PSNR/SSIM y tiempos de variantes del banco de Unity")
     p.add_argument("bench", help="carpeta del banco (<entorno>/bench)")
     p.add_argument("--referencia", required=True)

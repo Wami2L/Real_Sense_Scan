@@ -301,3 +301,47 @@ def test_colisiones_niveladas(tmp_path):
     assert not sin["nivelado"] and obstaculos(sin) > 10
     # Rotación identidad = sin nivelar (mismo marco que las pirámides).
     assert not colision.build(ply, colision.Opciones(), log, rotacion=[0, 0, 0, 1])[0]["nivelado"]
+
+
+def test_experiencia_recorta_objeto_con_pivote_en_la_base_y_variante_quest(tmp_path):
+    """Visita (rama ExperienceDemo): el recorte se queda con lo de dentro de la caja (ejes de Unity = x, -y, z del
+    archivo), sin los transparentes, gigantes ni sueltos, con el pivote en el centro de su base; y si pasa del
+    límite de Quest escribe además la variante con los más importantes."""
+    from live3d.splats import experiencia as ex
+    rng = np.random.default_rng(3)
+    # Objeto: un bloque denso de 0,4 × 1 × 0,4 m con la base a 1 m del suelo (Unity y ∈ [1, 2] → RDF y ∈ [-2, -1]).
+    obj = np.column_stack([rng.uniform(-0.2, 0.2, 4000), rng.uniform(-2, -1, 4000), rng.uniform(4.8, 5.2, 4000)])
+    fuera = rng.uniform(-3, 3, (2000, 3))
+    fuera[:, 2] += 10                                       # lejos de la caja
+    pos = np.vstack([obj, fuera, [[0, -1.5, 5.0]], [[0.1, -1.5, 5.0]]]).astype(np.float32)
+    n = len(pos)
+    alpha = np.full(n, 0.8, np.float32)
+    alpha[-2] = 0.005                                       # casi transparente
+    sigma = np.full((n, 3), 0.005, np.float32)
+    sigma[-1] = 0.5                                         # gigante (mancha de pared)
+    path = _write_scene(str(tmp_path / "escena.ply"), pos, alpha, sigma, sh_degree=1)
+    ply = SplatPly.open(path)
+    s = ex.leer_splats(ply)
+    caja = {"min": [-0.3, 0.9, 4.7], "max": [0.3, 2.1, 5.3]}
+    o = ex.Opciones(max_quest=1000)
+    ficha = ex.recortar(ply, s, {"id": "bloque", "caja": caja}, str(tmp_path / "bloque.ply"), o)
+
+    assert ficha["splats"] == 4000
+    assert ficha["pivote"][1] == pytest.approx(1.0, abs=0.02)            # base del objeto (Unity)
+    assert ficha["pivote"][2] == pytest.approx(5.0, abs=0.02)
+    assert ficha["min"][1] == pytest.approx(0.0, abs=0.02)
+    assert ficha["max"][1] == pytest.approx(1.0, abs=0.02)
+    out = SplatPly.open(str(tmp_path / "bloque.ply"))
+    p = out.columns(["x", "y", "z"])
+    assert out.count == 4000 and out.sh_degree == 1
+    assert -p[:, 1].max() == pytest.approx(0.0, abs=0.02)                # RDF (arriba = -y): base en y = 0
+    assert ficha["ply_quest"] == "bloque_quest.ply"
+    assert SplatPly.open(str(tmp_path / "bloque_quest.ply")).count == 1000
+
+
+def test_experiencia_narracion_con_pronunciacion():
+    from live3d.splats import experiencia as ex
+    punto = {"titulo": "Kroměříž", "texto": "Obispo Schrattenbach en Kroměříž."}
+    t = ex.texto_narracion(punto, {"Kroměříž": "Krómierzhish", "Schrattenbach": "Shrátenbaj"})
+    assert t == "Krómierzhish. Obispo Shrátenbaj en Krómierzhish."
+    assert ex.texto_narracion({"titulo": "A", "narracion": "Otra cosa"}) == "Otra cosa"

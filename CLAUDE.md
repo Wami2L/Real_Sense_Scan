@@ -141,6 +141,7 @@ python tools/generar_base_escaneo.py --hoja A3   # hoja imprimible de la base de
 python tools/reprocesar_objeto.py Saves/<fecha>/objeto_HHMMSS [--reemplazar <id>]  # rehacer un objeto sin cámara
 python tools/splats.py info|camaras|limpiar|estacion|lod|piramide|colision|comparar ...  # escenas 3DGS (plan 15 §7, §12)
 python tools/splats.py preparar <escena.ply> --nombre X --colmap <sparse/0> --unity <proyecto>  # escena propia -> Unity (§14)
+python tools/splats.py experiencia experiencias/iglesia_san_mauricio.json --unity <proyecto>  # visita: recortes + narración (ExperienceDemo)
 .venv-splats\Scripts\python tools/destilar.py <lod.ply> --maestro <limpio.ply>  # destilación (PyTorch+gsplat, plan 15 §12.6)
 python -m live3d.tools.probe_client  # cliente WS de prueba
 python -m pip install -r requirements-dev.txt
@@ -160,4 +161,8 @@ servidor con el estudio como interfaz principal (fases U0–U5).
 `documentacion/planes/14_Plan_Escaneo_Texturizado_RealSense.md` — geometría RealSense + textura fotográfica (vigente).
 `documentacion/planes/15_Plan_Biblioteca_VR_y_Entornos_Gaussian_Splatting.md` — **fin del proyecto** (biblioteca infinita en
 VR dentro de entornos 3DGS) y plan G0–G6 para 3DGS en Unity; base elegida: gsplat (wuyize) vendorizado.
+Rama `ExperienceDemo`: experiencia de visita de la iglesia (fichas, narración con voz de Windows, objetos recortados de
+los splats y sala de inspección). Definición en `experiencias/<x>.json` (cajas en ejes de Unity del PLY limpio, textos,
+`pronunciacion` para la voz); lógica en `live3d/splats/experiencia.py`; Unity: `Assets/ScanWorld/Experiencia/` (ver su
+`LEEME.md`). Los recortes de la iglesia son derivados CC BY-NC-ND: no distribuirlos.
 Guía de uso: `documentacion/GUIA_ESCANER_OBJETOS.md`.
