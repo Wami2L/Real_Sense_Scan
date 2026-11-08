@@ -1,0 +1,15 @@
+# Normaliza el texto a LF en el repositorio
+* text=auto
+
+# Scripts con el fin de línea que necesita su intérprete
+*.sh  text eol=lf
+*.bat text eol=crlf
+
+# Binarios: nunca convertir saltos de línea
+*.pdf  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.ply  binary
+*.rsm  binary
+*.zip  binary
