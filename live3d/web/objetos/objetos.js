@@ -48,7 +48,8 @@ function setStep(n) {
   });
   const showViewer = n === 4;
   $('visor3d').classList.toggle('hidden', !showViewer);
-  $('encuadre').classList.toggle('hidden', showViewer);
+  // En el visor 3D se ocultan todas las vistas de cámara (Cam 1, Cam 2, sus rótulos y el aviso de calibración).
+  document.querySelector('.stage').classList.toggle('modo-visor', showViewer);
   if (showViewer) { $('chips').innerHTML = ''; $('warnings').innerHTML = ''; } else if (viewer) viewer.stop();
   updateFraming();
 }

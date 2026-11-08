@@ -161,3 +161,6 @@ kbd { font-family: var(--mono); font-size: 0.68rem; background: rgba(5,7,13,.25)
 .calib b.ok { color: var(--ok); } .calib b.bad { color: var(--warn); }
 button.small { padding: 4px 9px; font-size: 0.74rem; }
 @media (max-width: 900px) { .vistas.dual { grid-template-columns: 1fr; } }
+/* visor 3D del resultado: sin vistas de cámara ni avisos encima */
+.stage.modo-visor .vistas, .stage.modo-visor .calib,
+.stage.modo-visor .chips, .stage.modo-visor .warnings { display: none !important; }
