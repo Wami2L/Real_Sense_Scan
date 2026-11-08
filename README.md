@@ -1,140 +1,150 @@
-# RealSenseScans 🎥✨
-### Dual Intel RealSense Live 3D Streaming, Calibration Studio & 3D Scanning Suite
+# RealSenseScans
+
+### Escáner 3D con dos Intel RealSense, streaming en vivo, calibración dual y paso a Unity VR
 
 [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
-[![Intel RealSense](https://img.shields.io/badge/Intel%20RealSense-D400%20Series-informational.svg)](https://www.intelrealsense.com/)
-[![Open3D](https://img.shields.io/badge/Open3D-3D%20Data%20Processing-orange.svg)](http://www.open3d.org/)
-[![Three.js](https://img.shields.io/badge/Three.js-WebGL%20Stream-black.svg)](https://threejs.org/)
+[![Intel RealSense](https://img.shields.io/badge/Intel%20RealSense-D400-informational.svg)](https://github.com/IntelRealSense/librealsense)
+[![Open3D](https://img.shields.io/badge/Open3D-0.18%2B-orange.svg)](http://www.open3d.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Sistema integral para captura RGB-D, transmisión de nubes de puntos 3D en tiempo real vía WebSockets/WebGL (Three.js), estudio de calibración extrínseca multicámara interactivo y reconstrucción de mallas 3D con integración en Blender.
+Sistema para capturar objetos y espacios con una o dos cámaras de profundidad Intel RealSense (probado con dos
+D455), verlos en 3D en el navegador en tiempo real, calibrar las cámaras entre sí y llevar el resultado a Blender
+y a una galería en realidad virtual hecha en Unity
+([VR ScanWorld](https://github.com/Wami2L/Unity_Realsense_Reciever)). Incluye además herramientas para preparar
+escenas de *Gaussian Splatting* (3DGS) como entornos VR.
+
+Todo funciona también **sin cámaras**, con escenas sintéticas (`--synthetic`, `--synthetic-object`).
 
 ---
 
-## 🌟 Características Principales
+## Características
 
-- **Escáner de Objetos → Blender → Unity** (`http://localhost:5002/objetos`):
-  - Base imprimible con marcadores ArUco (`imprimibles/base_escaneo_A3.pdf`): pose exacta de la cámara en cada toma.
-  - Encuadre guiado: el objeto se resalta en verde, el resto se ignora; avisos según el alcance de la D455.
-  - Malla limpia, a escala, de pie y con pivote en la base. Con dos cámaras corrige sola la calibración.
+- **Escáner de objetos → Blender → Unity** (`http://localhost:5002/objetos`)
+  - Hoja imprimible con marcadores ArUco (`imprimibles/base_escaneo_A3.pdf`) que da la pose y la escala real
+    de cada toma.
+  - Encuadre guiado: el objeto se resalta y el resto se ignora; avisos según el alcance de la D455.
+  - Malla limpia, a escala, de pie y con pivote en la base, texturizada con las fotos de las tomas.
+  - Con dos cámaras corrige sola la calibración entre ellas.
   - Ajuste opcional en Blender (addon: abrir, limpieza rápida, *Publicar en Unity*).
-  - Unity (VR ScanWorld) recibe los objetos por un enlace privado y los construye con partículas de luz.
-  - Guía: [`documentacion/GUIA_ESCANER_OBJETOS.md`](documentacion/GUIA_ESCANER_OBJETOS.md).
-
-- **Streaming 3D en Vivo (Live3D):**
-  - Servidor asíncrono de alto rendimiento (`aiohttp` + WebSockets).
-  - Visor WebGL interactivo con Three.js y shaders personalizados para nubes de puntos de ultra baja latencia.
-  - Soporte de renderizado individual o fusión dual calibrada en vivo.
-  - Modo simulación sintética (`--synthetic`) para pruebas sin necesidad de cámaras físicas conectadas.
-
-- **Estudio de Calibración y Fotogrametría Dual:**
-  - Detección de correspondencias de características 2D (SIFT / ORB / FLANN).
-  - Geometría epipolar, matrices fundamentales y homografías.
-  - Estimación de transformación rígida 3D (Kabsch / Umeyama) refinada mediante ICP (*Iterative Closest Point*).
-  - Panel web de inspección visual en tiempo real: análisis epipolar, superposición anaglífica (3D) y alineación de profundidad.
-
-- **Pipeline de Escaneo 3D y Generación de Malla:**
-  - Captura sincronizada de nube de puntos (`.ply`), mapa de profundidad y fotografías RGB.
-  - Generación offline de malla sólida con triangulación de Delaunay 2.5D y filtrado de aristas.
-  - Mapeo UV y texturizado fotográfico automático exportado en formato `.obj`.
-
-- **Integración con Blender:**
-  - Add-on para Blender (`RealSense_Importer.py`) con instanciación de Geometry Nodes para visualización de nubes de puntos en Cycles y Eevee.
-  - Script independiente (`script_blender.py`) para carga directa del escaneo más reciente.
+  - Unity recibe los objetos por un enlace local (puerto 5010) y los construye con partículas.
+- **Live 3D**: servidor `aiohttp` + WebSockets con protocolo binario propio y visor Three.js; una cámara o las
+  dos fusionadas con su calibración.
+- **Estudio de calibración dual** (`http://localhost:5005`): alineación SIFT 3D + RANSAC + ICP robusto,
+  marcadores ArUco, puntos a mano, mapas de error e historial de calibraciones con deshacer.
+- **Escenas 3DGS** (`tools/splats.py`): limpieza, poda, LOD, colisiones y exportación a Unity de escenas
+  propias (vídeo → COLMAP → entrenamiento → `preparar`), más visitas narradas definidas en `experiencias/*.json`.
+- **Blender**: addon `RealSense_Importer.py` (Blender ≥ 4.0) que importa los escaneos con sus ejes, cámaras y
+  color.
 
 ---
 
-## 🚀 Inicio Rápido
+## Inicio rápido
 
-### En Windows (1 Clic)
+### Windows
 
-1. **Instalar dependencias:**  
-   Ejecuta haciendo doble clic en `instalar_dependencias.bat` (o desde PowerShell/CMD).
-   > Crea automáticamente un entorno virtual aislado (`.venv`) e instala `pyrealsense2`, `open3d`, `opencv-python`, etc.
+1. `instalar_dependencias.bat` — crea `.venv` e instala `requirements.txt`.
+2. `iniciar_sistema.bat` — levanta los tres servidores y abre el escáner de objetos.
 
-2. **Iniciar el sistema:**  
-   Ejecuta haciendo doble clic en `iniciar_sistema.bat`.
-   > Levanta el servidor Live 3D y escáner de objetos (5002), el Estudio de Calibración (5005) y el enlace con
-   > Unity (5010), y abre el escáner de objetos en el navegador.
+| Servicio | URL |
+|---|---|
+| Escáner de objetos | http://localhost:5002/objetos |
+| Visor Live 3D | http://localhost:5002 |
+| Estudio de calibración | http://localhost:5005 |
+| Enlace con Unity | http://127.0.0.1:5010 (solo este equipo; `--red` con token para otros) |
 
-### En Linux / macOS
+### Linux / macOS
 
 ```bash
-# 1. Instalar dependencias
 bash instalar_dependencias.sh
-
-# 2. Iniciar el sistema
 bash iniciar_sistema.sh
 ```
 
-### Ejecución Manual y Modo Simulación
-
-Si no tienes las cámaras RealSense conectadas físicamente o deseas probar el visor en una laptop:
+### Sin cámaras
 
 ```bash
-# Activar entorno virtual
-.\.venv\Scripts\activate   # En Windows
-source .venv/bin/activate  # En Linux/macOS
-
-# Modo simulación sintética con cámara dual
-python app.py --synthetic --dual
-
-# Iniciar estudio de calibración y fotogrametría
-python test_fotogrametria/servidor_test.py
+python app.py --synthetic --dual      # Live 3D con dos cámaras simuladas
+python app.py --synthetic-object      # escáner de objetos con plato giratorio simulado
 ```
+
+Si arranca en simulación por falta de cámaras, cambia solo a las reales al conectarlas.
 
 ---
 
-## 📁 Estructura del Proyecto
+## Comandos útiles
+
+```bash
+python tools/generar_base_escaneo.py --hoja A3                 # hoja imprimible de la base de escaneo
+python tools/reprocesar_objeto.py Saves/<fecha>/objeto_HHMMSS  # rehacer un objeto sin cámara
+python tools/splats.py preparar <escena.ply> --nombre X --colmap <sparse/0> --unity <proyecto>
+python -m pytest                                               # tests (lanzan su propio servidor sintético)
+python tools/bench_live3d.py --spawn --capture                 # benchmark sintético
+```
+
+`tools/destilar.py` necesita un entorno aparte con PyTorch y gsplat (ver el plan 15, §12.6).
+
+---
+
+## Estructura
 
 ```text
 RealSenseScans/
-├── app.py                         # Lanzador unificado del sistema
-├── camera_manager.py              # Administrador de dispositivos RealSense
-├── config/
-│   └── dual_camera_config.json    # Parámetros extrínsecos y configuración dual
-├── documentacion/                 # Documentación técnica completa y planes (PDF y MD)
-│   ├── Documentacion_RealSenseScans.md
-│   ├── GUIA_EMPAQUETADO_Y_GITHUB.md
-│   └── planes/                    # Arquitectura, fotogrametría y calibración
-├── live3d/                        # Módulo de streaming 3D en tiempo real
-│   ├── capture.py                 # Captura asíncrona RGB-D
-│   ├── protocol.py                # Protocolo binario de empaquetado de puntos
-│   ├── server.py                  # Servidor aiohttp WebSocket
-│   └── web/                       # Visor Three.js con shaders custom
-├── test_fotogrametria/            # Estudio de calibración multicámara
-│   ├── calibrador.py              # Algoritmos SIFT, epipolar y alineación ICP
-│   ├── servidor_test.py           # Backend Flask del estudio
-│   └── web/                       # Interfaz visual de diagnóstico y captura
-├── multiscan.py                   # Motor de escaneo multicámara
-├── generar_malla_offline.py       # Reconstrucción de malla Delaunay 2.5D
-├── RealSense_Importer.py          # Add-on para Blender (Geometry Nodes)
-├── script_blender.py              # Script standalone para Blender
-├── Saves/                         # Directorio local de escaneos (ignorado en Git)
-├── requirements.txt               # Dependencias de Python
-└── .gitignore                     # Filtros para mantener el repositorio limpio
+├── app.py                     # Servidor principal (Live 3D + escáner de objetos, puerto 5002)
+├── live3d/
+│   ├── server.py              # aiohttp: /ws, /api/*, visor y /objetos
+│   ├── capture.py             # Fuentes RealSense (1 o 2 cámaras) y sintéticas
+│   ├── protocol.py            # Protocolo binario RSF1
+│   ├── alignment.py           # Motor de alineación Cam 2 → Cam 1
+│   ├── registration.py        # Nubes, TSDF dual, convención de ejes
+│   ├── objscan/               # Escáner de objetos (base ArUco, segmentación, TSDF, textura, RSM)
+│   ├── splats/                # Escenas Gaussian Splatting (PLY, limpieza, LOD, experiencias)
+│   ├── unity_link.py          # Enlace con Unity (puerto 5010)
+│   └── web/                   # Visor Three.js e interfaz /objetos
+├── test_fotogrametria/        # Estudio de calibración dual (puerto 5005)
+├── multiscan.py               # Sesión multi-vista (pose graph + Poisson)
+├── generar_malla_offline.py   # Malla Delaunay 2.5D de un escaneo simple
+├── RealSense_Importer.py      # Addon de Blender
+├── script_blender.py          # Abre un objeto escaneado en Blender
+├── tools/                     # CLI: base de escaneo, marcadores, splats, benchmark...
+├── experiencias/              # Visitas VR narradas (JSON)
+├── imprimibles/               # Hojas de marcadores en PDF
+├── config/                    # Configuración y calibración de las cámaras
+├── documentacion/             # Guías y planes técnicos (MD + PDF)
+├── tests/                     # pytest
+└── Saves/                     # Escaneos y objetos (local, ignorado por git)
 ```
 
 ---
 
-## ⚙️ Requisitos del Sistema
+## Requisitos
 
-- **Python:** 3.10, 3.11 o 3.12 (64-bit recomendado).
-- **Hardware:**
-  - 1 o 2 cámaras Intel RealSense D400 (D435, D435i, D455) conectadas a puertos USB 3.0.
-  - Tarjeta gráfica con soporte WebGL para el visor 3D en el navegador.
-- **Blender (Opcional):** Versión 3.0 o superior para el add-on de visualización de nubes de puntos.
+- Python 3.10–3.12, 64 bits.
+- 1 o 2 cámaras Intel RealSense D400 (probado con D455) en USB 3. Sin cable de sincronía, las dos cámaras
+  funcionan en modo independiente.
+- Navegador con WebGL.
+- Opcional: Blender ≥ 4.0, Unity 6 con el proyecto [VR ScanWorld](https://github.com/Wami2L/Unity_Realsense_Reciever).
 
----
-
-## 📖 Documentación Adicional
-
-Para más detalles sobre la arquitectura interna, planes de mejora y calibración avanzada, consulta la carpeta `documentacion/`:
-- `documentacion/Documentacion_RealSenseScans.md`: Detalles técnicos de los módulos.
-- `documentacion/GUIA_EMPAQUETADO_Y_GITHUB.md`: Guía de portabilidad y empaquetado.
-- `documentacion/planes/`: Informes detallados sobre captura dual y fusión en vivo.
+`config/dual_camera_config.json` trae los números de serie y la calibración de las cámaras del autor: con
+otras cámaras, cambia los seriales y vuelve a calibrar desde el estudio o desde `/objetos`.
 
 ---
 
-## 📄 Licencia
+## Documentación
 
-Este proyecto está disponible para propósitos de investigación, desarrollo e ingeniería en visión por computadora.
+- [Guía del escáner de objetos](documentacion/GUIA_ESCANER_OBJETOS.md)
+- [Instalación y dependencias](documentacion/05_Dependencias_e_Instalacion.md)
+- [Malla offline](documentacion/03_Procesamiento_Malla_3D.md) · [Blender](documentacion/04_Integracion_Blender.md)
+- [Estudio de calibración](test_fotogrametria/README.md) · [Live 3D](live3d/README.md)
+- [Planes técnicos](documentacion/planes/README.md): historia del diseño, del soporte dual a los entornos 3DGS.
+
+---
+
+## Contenido de terceros
+
+- **three.js** (MIT) va incluido en `live3d/web/vendor/`.
+- Las escenas de Gaussian Splatting **no se incluyen**. La visita de `experiencias/iglesia_san_mauricio.json`
+  usa el escaneo *Parish Church of Saint Maurice* de Pavel Tanhäuser (superspl.at, **CC BY-NC-ND 4.0**):
+  descárgalo de su fuente y no redistribuyas versiones modificadas ni recortes de él.
+
+## Licencia
+
+Código bajo licencia [MIT](LICENSE) © 2026 Wami.

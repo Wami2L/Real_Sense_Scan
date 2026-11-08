@@ -3,8 +3,8 @@
 Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español** (código, comentarios, docs y UI).
 
 ## Flujo de ramas
-- `main` ← `Pre_Produccion` ← `testing` / `Current_Changes`.
-- El trabajo de mejora se hace en **`Pre_Produccion`**. No hacer push ni merge a `main` sin confirmación.
+- Repositorio público con una sola rama, `main`. El trabajo nuevo va en una rama aparte; no hacer push ni merge a
+  `main` sin confirmación.
 
 ## Hardware real
 - 2× Intel RealSense **D455** por USB 3.2 (seriales en `config/dual_camera_config.json`):
@@ -87,7 +87,7 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
 - Coordenadas RealSense: x derecha, y abajo, z adelante. Three.js: (x,-y,-z). Blender: (x,z,-y).
 
 ## Proyecto Unity asociado
-- `C:\Users\Usuario\Documents\Proyectos Unity\VR ScanWorld` — Unity **6000.3.8f1**, URP 17.3, solo Input System nuevo,
+- **VR ScanWorld** (en el equipo de desarrollo, `..\Proyectos Unity\VR ScanWorld` junto a este repo) — Unity **6000.3.8f1**, URP 17.3, solo Input System nuevo,
   espacio lineal. Git propio: https://github.com/Wami2L/Unity_Realsense_Reciever (rama `main`; G0 del plan 15 en la
   rama `gsplat`). XRI 3.6.1 + OpenXR 1.16.1 (+ Oculus 4.5.5 instalado pero sin loader).
 - VR (G0, plan 15): **OpenXR en las dos plataformas**. Windows = D3D12 (+Vulkan), SPI, perfiles Vive/Oculus Touch/Index
@@ -119,9 +119,7 @@ Contexto para agentes que trabajen en este repo. Idioma del proyecto: **español
   `-runTests -testPlatform PlayMode` (el test del enlace se ignora si 5010 no responde).
 - Ejes RealSense (cámara) → Unity: `(x, -y, z)`. Objetos escaneados: ya vienen en Unity dentro del `.rsm`.
 
-## Código legado / no usar como referencia
-- `app_legacy_flask.py`, `camera_manager.py`, `templates/`, `static/` — interfaz Flask antigua.
-- `escanear.py` — script suelto.
+## Deuda técnica conocida
 - `test_fotogrametria/servidor_test.py` reescribe `main.js` por reemplazo de strings para apuntar a 5002 (frágil;
   5002 envía CORS para `localhost:5005` mientras no se unifiquen).
 
@@ -141,7 +139,7 @@ python tools/generar_base_escaneo.py --hoja A3   # hoja imprimible de la base de
 python tools/reprocesar_objeto.py Saves/<fecha>/objeto_HHMMSS [--reemplazar <id>]  # rehacer un objeto sin cámara
 python tools/splats.py info|camaras|limpiar|estacion|lod|piramide|colision|comparar ...  # escenas 3DGS (plan 15 §7, §12)
 python tools/splats.py preparar <escena.ply> --nombre X --colmap <sparse/0> --unity <proyecto>  # escena propia -> Unity (§14)
-python tools/splats.py experiencia experiencias/iglesia_san_mauricio.json --unity <proyecto>  # visita: recortes + narración (ExperienceDemo)
+python tools/splats.py experiencia experiencias/iglesia_san_mauricio.json --unity <proyecto>  # visita: recortes + narración
 .venv-splats\Scripts\python tools/destilar.py <lod.ply> --maestro <limpio.ply>  # destilación (PyTorch+gsplat, plan 15 §12.6)
 python -m live3d.tools.probe_client  # cliente WS de prueba
 python -m pip install -r requirements-dev.txt
@@ -161,7 +159,7 @@ servidor con el estudio como interfaz principal (fases U0–U5).
 `documentacion/planes/14_Plan_Escaneo_Texturizado_RealSense.md` — geometría RealSense + textura fotográfica (vigente).
 `documentacion/planes/15_Plan_Biblioteca_VR_y_Entornos_Gaussian_Splatting.md` — **fin del proyecto** (biblioteca infinita en
 VR dentro de entornos 3DGS) y plan G0–G6 para 3DGS en Unity; base elegida: gsplat (wuyize) vendorizado.
-Rama `ExperienceDemo`: experiencia de visita de la iglesia (fichas, narración con voz de Windows, objetos recortados de
+Experiencia de visita de la iglesia (fichas, narración con voz de Windows, objetos recortados de
 los splats y sala de inspección). Definición en `experiencias/<x>.json` (cajas en ejes de Unity del PLY limpio, textos,
 `pronunciacion` para la voz); lógica en `live3d/splats/experiencia.py`; Unity: `Assets/ScanWorld/Experiencia/` (ver su
 `LEEME.md`). Los recortes de la iglesia son derivados CC BY-NC-ND: no distribuirlos.

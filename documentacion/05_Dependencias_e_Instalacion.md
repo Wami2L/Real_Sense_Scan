@@ -1,73 +1,62 @@
-# 05. Dependencias, Instalación y Librerías
+# 05. Dependencias, Instalación y Ejecución
 
-Este documento detalla las librerías necesarias para ejecutar el proyecto **RealSenseScans**, así como los pasos para configurar el entorno de desarrollo y ejecutar la aplicación.
+## 1. Requisitos previos
 
-## 1. Requisitos Previos
+- **Python 3.10, 3.11 o 3.12** (64 bits).
+- **Cámara(s)**: una o dos Intel RealSense serie D400 (probado con dos D455) en puertos USB 3. Sin cámaras se
+  puede usar el modo sintético.
+- **Navegador** con WebGL para el visor 3D y el escáner de objetos.
+- **Blender ≥ 4.0** (opcional) para el addon `RealSense_Importer.py`.
+- **Unity 6** (opcional) con el proyecto [VR ScanWorld](https://github.com/Wami2L/Unity_Realsense_Reciever).
 
-*   **Python 3.8 - 3.10**: Se recomienda para mantener la compatibilidad con Open3D y el SDK de Intel RealSense.
-*   **Hardware**: Cámara de profundidad Intel RealSense (serie D400, como la D455) conectada a un puerto USB 3.0.
-*   **Blender (Opcional)**: Para utilizar los scripts de importación y manipulación de geometría (recomendable v3.0 o superior).
+## 2. Librerías (Python)
 
-## 2. Librerías y Dependencias (Python)
+Todas están en `requirements.txt`:
 
-El proyecto hace uso de las siguientes bibliotecas principales para la captura, cálculo matemático, visión por computadora y servidor web:
+| Librería | Uso |
+|---|---|
+| `pyrealsense2` | Acceso a las cámaras: color, profundidad alineada, opciones del sensor. |
+| `open3d` | Nubes de puntos, ICP, TSDF, mallas y atlas UV. |
+| `opencv-python` | Marcadores ArUco, SIFT, rectificación de la lente, imágenes. |
+| `numpy`, `scipy` | Álgebra, Delaunay 2.5D, optimización. |
+| `pillow` | Lectura y escritura de imágenes (texturas). |
+| `aiohttp` | Servidores web y WebSockets (5002, 5005 y 5010). |
+| `markdown`, `xhtml2pdf` | Generar los PDF de la documentación desde los `.md`. |
 
-*   **`pyrealsense2`**: Interfaz oficial de Intel para comunicarse directamente con el sensor, leer los streams de video RGB y de profundidad alineada.
-*   **`open3d`**: Herramienta esencial para el procesamiento 3D. Se usa para visualizar y manipular las nubes de puntos y generar modelos en tiempo real.
-*   **`opencv-python` (cv2)**: Utilizada para el procesamiento de texturas, redimensionado de imágenes y manipulación de las capas RGB que se aplican sobre la malla.
-*   **`scipy`**: Brinda acceso a `scipy.spatial.Delaunay`, necesario para realizar la triangulación 2.5D que convierte la nube de puntos aislados en una malla sólida y continua.
-*   **`numpy`**: Soporte matemático para el manejo eficiente de grandes arreglos de datos correspondientes a coordenadas 3D y píxeles 2D.
-*   **`Flask`**: Framework de backend que expone los flujos de la cámara en formato web y provee la interfaz ("Glassmorphism") para controlar los escaneos desde el navegador.
+Para los tests: `requirements-dev.txt` (añade `pytest`). La destilación de splats (`tools/destilar.py`) usa un
+entorno aparte con PyTorch y gsplat (plan 15, §12.6).
 
-*(Nota: Para los scripts que convierten la documentación de Markdown a PDF, se utilizan `markdown` y `xhtml2pdf`).*
+## 3. Instalación
 
-## 3. Guía de Instalación
+**Windows:** doble clic en `instalar_dependencias.bat`.
 
-Es altamente recomendable instalar todo dentro de un entorno virtual (`venv`) para no interferir con las dependencias globales del sistema.
+**Linux / macOS:** `bash instalar_dependencias.sh`.
 
-### Paso 1: Crear y Activar Entorno Virtual
-
-En la terminal (dentro de la carpeta `RealSenseScans`):
-
-**En Windows:**
-```bash
-python -m venv venv
-.\venv\Scripts\activate
-```
-
-**En Linux / macOS:**
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### Paso 2: Instalar las Librerías
-
-Puedes instalar directamente todas las dependencias requeridas ejecutando el siguiente comando a través de `pip`:
+Ambos crean el entorno virtual `.venv` e instalan `requirements.txt`. A mano:
 
 ```bash
-pip install open3d opencv-python pyrealsense2 scipy numpy Flask
+python -m venv .venv
+.venv\Scripts\activate          # Windows
+source .venv/bin/activate       # Linux / macOS
+pip install -r requirements.txt
 ```
 
-*(Si se añade posteriormente un archivo `requirements.txt`, bastaría con correr `pip install -r requirements.txt`)*
+## 4. Ejecución
 
-## 4. Ejecución del Sistema
+`iniciar_sistema.bat` (o `iniciar_sistema.sh`) arranca los tres servidores y abre el escáner de objetos:
 
-### A. Escaneo en Tiempo Real
-Para iniciar la interfaz de escáner y la comunicación con la cámara:
+| Proceso | Comando | URL |
+|---|---|---|
+| Live 3D + escáner de objetos | `python app.py` | http://localhost:5002 y http://localhost:5002/objetos |
+| Estudio de calibración dual | `python test_fotogrametria/servidor_test.py` | http://localhost:5005 |
+| Enlace con Unity | `python -m live3d.unity_link` | http://127.0.0.1:5010 |
+
+Sin cámaras:
+
 ```bash
-python app.py
-```
-Abre tu navegador web y entra en: `http://localhost:5000`
-
-### B. Post-Procesamiento (Generar Malla)
-Tras presionar el botón "Capturar Ambos" en la web, los datos se guardarán en la carpeta `Saves/`. Para convertir estos datos puros en una malla texturizada `.obj`:
-```bash
-python generar_malla_offline.py
+python app.py --synthetic --dual    # dos cámaras simuladas
+python app.py --synthetic-object    # escáner de objetos simulado
 ```
 
-### C. Importar a Blender
-1. Abre Blender.
-2. Ve a `Edit > Preferences > Add-ons`.
-3. Haz clic en **Install...**, busca el archivo `RealSense_Importer.py` y actívalo.
-4. Usa el nuevo panel derecho en la vista 3D para importar automáticamente tu nube de puntos o generar y cargar la malla procesada.
+Los escaneos y objetos se guardan en `Saves/`. Para generar la malla de un escaneo simple:
+`python generar_malla_offline.py`. Para Blender, ver [04_Integracion_Blender.md](04_Integracion_Blender.md).

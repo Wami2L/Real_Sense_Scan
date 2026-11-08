@@ -147,7 +147,7 @@ Añadir subpanel colapsable `#dual-calibration-tools` bajo `#dual-cam-controls`:
 
 ### Fase 3: Pipeline de Fusión y Desduplicación en Captura (`capture_dual_scan`)
 
-Garantizar que los escaneos estáticos guardados en [Saves/](file:///c:/Users/Usuario/Documents/RealSenseScans/Saves/) contengan **un solo resultado unificado sin puntos duplicados**.
+Garantizar que los escaneos estáticos guardados en [Saves/](../../Saves/) contengan **un solo resultado unificado sin puntos duplicados**.
 
 #### 3.1 Proceso de Fusión en `live3d/capture.py`:
 1. **Transformación Rígida:**

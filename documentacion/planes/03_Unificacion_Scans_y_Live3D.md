@@ -109,11 +109,11 @@ Actualmente el flujo está fragmentado:
 ## 6. Estado de Implementación: ¡Completado y Operativo al 100%!
 
 La unificación se ha ejecutado y probado exitosamente en el sistema:
-* **Punto de Entrada Único:** [app.py](file:///c:/Users/Usuario/Documents/RealSenseScans/app.py) inicia directamente la plataforma unificada (accesible también mediante `python -m live3d` o `python app.py --port 5002`).
-* **Respaldo Legacy:** El antiguo servidor Flask ha quedado preservado de forma segura en [app_legacy_flask.py](file:///c:/Users/Usuario/Documents/RealSenseScans/app_legacy_flask.py).
-* **Motor de Cámara Concurrente:** [live3d/capture.py](file:///c:/Users/Usuario/Documents/RealSenseScans/live3d/capture.py) centraliza la conexión con el hardware de ambas RealSense D455 (`DualRealSenseSource`), eliminando colisiones de USB.
-* **Captura Individual, Multi-Scan 360° y Escaneo Dual:** Integrados en el servidor asíncrono [live3d/server.py](file:///c:/Users/Usuario/Documents/RealSenseScans/live3d/server.py) con soporte para Open3D, calibración ChArUco y almacenamiento automático en `Saves/`.
-* **Frontend Web 3D Unificado:** El visor en [live3d/web/index.html](file:///c:/Users/Usuario/Documents/RealSenseScans/live3d/web/index.html) cuenta con:
+* **Punto de Entrada Único:** [app.py](../../app.py) inicia directamente la plataforma unificada (accesible también mediante `python -m live3d` o `python app.py --port 5002`).
+* **Respaldo Legacy:** El antiguo servidor Flask ha quedado preservado de forma segura en [app_legacy_flask.py](../../app_legacy_flask.py).
+* **Motor de Cámara Concurrente:** [live3d/capture.py](../../live3d/capture.py) centraliza la conexión con el hardware de ambas RealSense D455 (`DualRealSenseSource`), eliminando colisiones de USB.
+* **Captura Individual, Multi-Scan 360° y Escaneo Dual:** Integrados en el servidor asíncrono [live3d/server.py](../../live3d/server.py) con soporte para Open3D, calibración ChArUco y almacenamiento automático en `Saves/`.
+* **Frontend Web 3D Unificado:** El visor en [live3d/web/index.html](../../live3d/web/index.html) cuenta con:
   - Módulo dinámico **✨ Modo Dual Activo** con conmutación instantánea de cámara en vivo y botón de **Captura Dual 360°**.
   - Panel de mapeo multi-foto asistido con miniaturas en vivo y cálculo de registro Open3D.
   - Explorador modal de historial de escaneos guardados con previsualización de miniaturas tanto para escaneos simples, multi-captura como escaneos duales (`cam1_color.jpg`).

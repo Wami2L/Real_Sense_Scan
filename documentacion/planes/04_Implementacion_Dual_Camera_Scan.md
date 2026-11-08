@@ -211,27 +211,27 @@ Cuando el usuario pulsa **"Captura Dual 3D"**:
 Las cuatro fases de la hoja de ruta han sido implementadas e integradas satisfactoriamente en el repositorio:
 
 1. **Adquisición Dual Concurrente:**
-   - Implementado en [`live3d/capture.py`](file:///c:/Users/Usuario/Documents/RealSenseScans/live3d/capture.py) (`DualRealSenseSource`).
+   - Implementado en [`live3d/capture.py`](../../live3d/capture.py) (`DualRealSenseSource`).
    - Gestión inteligente del emisor IR láser: Cámara 1 proyecta patrón para dar textura, Cámara 2 apaga su emisor para evitar interferencia cruzada.
    - Streaming a 30 FPS en ambas cámaras en paralelo.
 
 2. **Calibrador ChArUco Automatizado:**
-   - Implementado en [`tools/calibrate_dual.py`](file:///c:/Users/Usuario/Documents/RealSenseScans/tools/calibrate_dual.py).
-   - Generación y lectura de configuración centralizada en [`config/dual_camera_config.json`](file:///c:/Users/Usuario/Documents/RealSenseScans/config/dual_camera_config.json).
+   - Implementado en [`tools/calibrate_dual.py`](../../tools/calibrate_dual.py).
+   - Generación y lectura de configuración centralizada en [`config/dual_camera_config.json`](../../config/dual_camera_config.json).
    - Endpoint de calibración directa en un clic desde el navegador: `POST /api/dual/calibrate`.
 
 3. **Fusión Geométrica y Limpieza en Open3D:**
-   - Función `capture_dual_scan` en [`live3d/capture.py`](file:///c:/Users/Usuario/Documents/RealSenseScans/live3d/capture.py):
+   - Función `capture_dual_scan` en [`live3d/capture.py`](../../live3d/capture.py):
      - Transformación rígida de la nube de Cam 2 mediante $T_{2 \to 1}$.
      - Fusión booleana de nubes de puntos (`pcd1 + pcd2_transformed`).
      - Decimación homogénea en zona de solape mediante `voxel_down_sample(voxel_size=0.002)`.
      - Supresión de ruido flotante mediante `remove_statistical_outlier(nb_neighbors=25, std_ratio=1.2)`.
-   - **Prueba con Hardware Real:** Validada la generación de escaneos duales con **314.843 puntos 3D** almacenados con éxito en la carpeta de sesiones [`Saves/`](file:///c:/Users/Usuario/Documents/RealSenseScans/Saves/):
+   - **Prueba con Hardware Real:** Validada la generación de escaneos duales con **314.843 puntos 3D** almacenados con éxito en la carpeta de sesiones [`Saves/`](../../Saves/):
      - `nube_fusionada.ply`, `nube_cam1.ply`, `nube_cam2.ply`.
      - `cam1_color.jpg`, `cam2_color.jpg`, mapas de calor de profundidad y `metadata_dual.json`.
 
 4. **Interfaz de Control en el Dashboard Web:**
-   - Sección **✨ Modo Dual Activo** visible en [`live3d/web/index.html`](file:///c:/Users/Usuario/Documents/RealSenseScans/live3d/web/index.html).
+   - Sección **✨ Modo Dual Activo** visible en [`live3d/web/index.html`](../../live3d/web/index.html).
    - Conmutador en vivo para alternar la señal de la Cámara 1 y la Cámara 2.
    - Botón **Captura Dual 360°** con registro instantáneo en el historial de guardados.
 

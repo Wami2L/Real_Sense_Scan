@@ -1,6 +1,6 @@
 # Plan 13: Escáner de objetos → Blender → Unity (VR ScanWorld)
 
-> **Rama:** `Pre_Produccion` · **Proyecto Unity:** `C:\Users\Usuario\Documents\Proyectos Unity\VR ScanWorld` (Unity 6000.3.8f1, URP 17.3)
+> **Rama:** `Pre_Produccion` · **Proyecto Unity:** [VR ScanWorld](https://github.com/Wami2L/Unity_Realsense_Reciever) (Unity 6000.3.8f1, URP 17.3)
 > **Fecha:** 2026-10-19 · **Estado:** implementado y verificado sin hardware; prueba con el escáner el 2026-10-20
 
 ---

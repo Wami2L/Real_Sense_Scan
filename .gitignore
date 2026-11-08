@@ -54,3 +54,7 @@ test_fotogrametria/web/*.jpg
 
 # Enlace privado con Unity (contiene el token)
 config/unity_link.json
+
+# Cachés de pruebas y salidas locales que no forman parte del producto
+.pytest_cache/
+Claude outputs/

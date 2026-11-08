@@ -10,7 +10,7 @@ Uso común:
     python app.py --port 5002      # Especificar puerto alternativo
     python app.py --host 0.0.0.0   # Permitir acceso desde otros PCs o tablets en la red local
 
-Nota: La versión anterior de Flask está respaldada en 'app_legacy_flask.py'.
+Ver README.md para el resto de servidores (estudio 5005, enlace Unity 5010).
 """
 
 import sys
