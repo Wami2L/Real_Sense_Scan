@@ -140,7 +140,7 @@ otras cámaras, cambia los seriales y vuelve a calibrar desde el estudio o desde
 
 ## Contenido de terceros
 
-- **three.js** (MIT) va incluido en `live3d/web/vendor/`.
+- **three.js** (MIT) va incluido en `live3d/web/vendor/` (ver [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
 - Las escenas de Gaussian Splatting **no se incluyen**. La visita de `experiencias/iglesia_san_mauricio.json`
   usa el escaneo *Parish Church of Saint Maurice* de Pavel Tanhäuser (superspl.at, **CC BY-NC-ND 4.0**):
   descárgalo de su fuente y no redistribuyas versiones modificadas ni recortes de él.
